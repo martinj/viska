@@ -1,0 +1,21 @@
+# Tuist and Xcode generated artifacts
+.build/
+Derived/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+
+# User-specific Xcode state
+xcuserdata/
+*.xcuserstate
+
+# SwiftPM local state
+.swiftpm/
+Package.resolved
+
+# macOS filesystem noise
+.DS_Store
+
+# Editor swap files
+*.swp
+*.swo

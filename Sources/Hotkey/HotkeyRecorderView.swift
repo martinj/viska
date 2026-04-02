@@ -1,0 +1,89 @@
+import AppKit
+import Carbon.HIToolbox
+import SwiftUI
+
+struct HotkeyRecorderView: View {
+    let currentHotkey: HotkeyDescriptor
+    let onHotkeyChange: (HotkeyDescriptor) -> Void
+
+    @StateObject private var coordinator = HotkeyCaptureCoordinator()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                coordinator.toggleCapture(onHotkeyChange: onHotkeyChange)
+            } label: {
+                HStack {
+                    Text(coordinator.isCapturing ? "Press shortcut…" : currentHotkey.displayString)
+                    Spacer()
+                    Image(systemName: coordinator.isCapturing ? "record.circle.fill" : "keyboard")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+
+            Text(coordinator.helpText ?? "Choose a modifier-based shortcut for global dictation.")
+                .font(.footnote)
+                .foregroundStyle(coordinator.errorMessage == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
+        }
+        .onDisappear {
+            coordinator.stopCapture()
+        }
+    }
+}
+
+@MainActor
+private final class HotkeyCaptureCoordinator: ObservableObject {
+    @Published private(set) var isCapturing = false
+    @Published private(set) var errorMessage: String?
+
+    var helpText: String? {
+        errorMessage
+    }
+
+    private var monitor: Any?
+
+    func toggleCapture(onHotkeyChange: @escaping (HotkeyDescriptor) -> Void) {
+        isCapturing ? stopCapture() : startCapture(onHotkeyChange: onHotkeyChange)
+    }
+
+    func stopCapture() {
+        isCapturing = false
+
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+
+        monitor = nil
+    }
+
+    private func startCapture(onHotkeyChange: @escaping (HotkeyDescriptor) -> Void) {
+        errorMessage = nil
+        isCapturing = true
+
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self else { return event }
+
+            if event.keyCode == UInt16(kVK_Escape) {
+                stopCapture()
+                return nil
+            }
+
+            guard let descriptor = HotkeyDescriptor.from(event: event) else {
+                return nil
+            }
+
+            do {
+                try descriptor.validate()
+                onHotkeyChange(descriptor)
+                errorMessage = nil
+            } catch let error as HotkeyDescriptor.ValidationError {
+                errorMessage = HotkeyDescriptor.errorMessage(for: error)
+            } catch {
+                errorMessage = "Unable to record that shortcut."
+            }
+
+            stopCapture()
+            return nil
+        }
+    }
+}
