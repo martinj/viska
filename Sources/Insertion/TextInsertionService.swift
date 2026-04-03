@@ -68,8 +68,11 @@ final class TextInsertionService: TextInserting {
         }
 
         let updatedValue = existingValue.replacingCharacters(in: swiftRange, with: text)
-        focusedElement.value = updatedValue
-        focusedElement.selectedRange = NSRange(location: insertionRange.location + text.utf16.count, length: 0)
+        guard focusedElement.setValue(updatedValue) else {
+            return false
+        }
+
+        _ = focusedElement.setSelectedRange(NSRange(location: insertionRange.location + text.utf16.count, length: 0))
         return true
     }
 

@@ -21,7 +21,7 @@ final class DictationStore: ObservableObject {
     private let audioCaptureEngine: (any AudioCaptureControlling)?
     private let overlayController: (any RecordingOverlayControlling)?
     private let codexStatusMonitor: CodexAuthStatusMonitor?
-    private let transcriptionClient: TranscriptionClient?
+    private let transcriptionClient: (any AudioTranscribing)?
     private let textInsertionService: (any TextInserting)?
     private weak var lifecycle: DictationLifecycleControlling?
     private var preferencesCancellable: AnyCancellable?
@@ -35,7 +35,7 @@ final class DictationStore: ObservableObject {
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
         overlayController: (any RecordingOverlayControlling)? = nil,
         codexStatusMonitor: CodexAuthStatusMonitor? = nil,
-        transcriptionClient: TranscriptionClient? = nil,
+        transcriptionClient: (any AudioTranscribing)? = nil,
         textInsertionService: (any TextInserting)? = nil,
         lifecycle: DictationLifecycleControlling? = nil,
         initialState: DictationState = .unavailable(title: "Checking Codex", message: "Codex setup is not ready yet.")
@@ -188,7 +188,7 @@ final class DictationStore: ObservableObject {
         }
     }
 
-    private func transcribe(audio: RecordedAudio, client: TranscriptionClient) async {
+    private func transcribe(audio: RecordedAudio, client: any AudioTranscribing) async {
         do {
             let result = try await client.transcribe(audio: audio)
             lastTranscript = result.text
@@ -198,21 +198,8 @@ final class DictationStore: ObservableObject {
                 switch insertionOutcome {
                 case .insertedDirectly, .insertedViaPaste:
                     break
-                case .clipboardFallback(let reason):
-                    switch reason {
-                    case .accessibilityDenied:
-                        setUnavailable(
-                            title: "Accessibility Required",
-                            message: "Enable VoiceCompanion in System Settings > Privacy & Security > Accessibility, then relaunch the app. The transcript was copied to the clipboard."
-                        )
-                        return
-                    case .pasteFailed:
-                        setUnavailable(
-                            title: "Paste Failed",
-                            message: "The transcript was copied to the clipboard, but automatic insertion into the focused app failed."
-                        )
-                        return
-                    }
+                case .clipboardFallback:
+                    break
                 }
             }
             state = .idle

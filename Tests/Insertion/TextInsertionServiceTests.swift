@@ -70,6 +70,28 @@ final class TextInsertionServiceTests: XCTestCase {
         XCTAssertEqual(permissions.requestedAccessibilityPrompts, [true])
     }
 
+    func testDirectInsertFailureFallsThroughToPaste() async {
+        let element = FakeFocusedTextElement(
+            value: "Hello world",
+            selectedRange: NSRange(location: 6, length: 5),
+            isWritable: true,
+            setValueSucceeds: false
+        )
+        let clipboard = FakeClipboardService()
+        let service = makeService(
+            accessibilityStatus: .granted,
+            element: element,
+            clipboard: clipboard,
+            pasteResult: true
+        )
+
+        let outcome = await service.insert("Martin")
+
+        XCTAssertEqual(outcome, .insertedViaPaste)
+        XCTAssertEqual(clipboard.value, "Martin")
+        XCTAssertEqual(element.value, "Hello world")
+    }
+
     private func makeService(
         accessibilityStatus: PermissionStatus = .granted,
         element: FakeFocusedTextElement?,
@@ -110,11 +132,33 @@ private final class FakeFocusedTextElement: FocusedTextElement {
     let isWritable: Bool
     var value: String?
     var selectedRange: NSRange?
+    private let setValueSucceeds: Bool
+    private let setSelectedRangeSucceeds: Bool
 
-    init(value: String?, selectedRange: NSRange?, isWritable: Bool) {
+    init(
+        value: String?,
+        selectedRange: NSRange?,
+        isWritable: Bool,
+        setValueSucceeds: Bool = true,
+        setSelectedRangeSucceeds: Bool = true
+    ) {
         self.value = value
         self.selectedRange = selectedRange
         self.isWritable = isWritable
+        self.setValueSucceeds = setValueSucceeds
+        self.setSelectedRangeSucceeds = setSelectedRangeSucceeds
+    }
+
+    func setValue(_ newValue: String) -> Bool {
+        guard setValueSucceeds else { return false }
+        value = newValue
+        return true
+    }
+
+    func setSelectedRange(_ newValue: NSRange) -> Bool {
+        guard setSelectedRangeSucceeds else { return false }
+        selectedRange = newValue
+        return true
     }
 }
 

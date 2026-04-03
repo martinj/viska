@@ -48,7 +48,34 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.state, .inserting)
     }
 
-    private func makeContext(mode: RecordingMode) -> StoreContext {
+    func testClipboardFallbackReturnsToIdleAndAllowsAnotherRecording() async throws {
+        let context = try makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "hello world")),
+            textInsertionService: FakeTextInsertionService(outcome: .clipboardFallback(reason: .accessibilityDenied))
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(context.store.lastTranscript, "hello world")
+        XCTAssertEqual(context.store.state, .idle)
+
+        context.store.handleHotkeyEvent(.pressed)
+
+        XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
+    private func makeContext(
+        mode: RecordingMode,
+        audioCaptureEngine: (any AudioCaptureControlling)? = nil,
+        transcriptionClient: (any AudioTranscribing)? = nil,
+        textInsertionService: (any TextInserting)? = nil
+    ) -> StoreContext {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let settingsStore = SettingsStore(userDefaults: defaults)
         settingsStore.updateRecordingMode(mode)
@@ -58,6 +85,9 @@ final class DictationStoreTests: XCTestCase {
         let store = DictationStore(
             settingsStore: settingsStore,
             hotkeyService: hotkeyService,
+            audioCaptureEngine: audioCaptureEngine,
+            transcriptionClient: transcriptionClient,
+            textInsertionService: textInsertionService,
             lifecycle: lifecycle,
             initialState: .unavailable(title: "Setup required", message: "Setup required")
         )
@@ -68,12 +98,86 @@ final class DictationStoreTests: XCTestCase {
             lifecycle: lifecycle
         )
     }
+
+    private func waitForIdle(
+        store: DictationStore,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if store.state == .idle {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for store to return to idle", file: file, line: line)
+    }
+
+    private static func makeRecordedAudio() throws -> RecordedAudio {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        try Data("audio".utf8).write(to: fileURL)
+        return RecordedAudio(fileURL: fileURL, sampleRate: 16_000, sampleCount: 2_000)
+    }
 }
 
 private struct StoreContext {
     let store: DictationStore
     let hotkeyService: FakeGlobalHotkeyService
     let lifecycle: DictationLifecycleSpy
+}
+
+@MainActor
+private final class FakeAudioCaptureEngine: AudioCaptureControlling {
+    private let recordedAudio: RecordedAudio
+    private(set) var isCapturing = false
+
+    init(recordedAudio: RecordedAudio) {
+        self.recordedAudio = recordedAudio
+    }
+
+    func startCapture(levelHandler: @escaping (Float) -> Void) throws {
+        isCapturing = true
+        levelHandler(0.5)
+    }
+
+    func stopCapture() throws -> RecordedAudio {
+        isCapturing = false
+        return recordedAudio
+    }
+
+    func cancelCapture() {
+        isCapturing = false
+    }
+}
+
+private final class FakeTranscriptionClient: AudioTranscribing, @unchecked Sendable {
+    private let result: TranscriptionResult
+
+    init(result: TranscriptionResult) {
+        self.result = result
+    }
+
+    func transcribe(audio: RecordedAudio) async throws -> TranscriptionResult {
+        result
+    }
+}
+
+@MainActor
+private final class FakeTextInsertionService: TextInserting {
+    private let outcome: TextInsertionOutcome
+
+    init(outcome: TextInsertionOutcome) {
+        self.outcome = outcome
+    }
+
+    func insert(_ text: String) async -> TextInsertionOutcome {
+        outcome
+    }
 }
 
 @MainActor

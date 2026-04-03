@@ -1,6 +1,10 @@
 import Foundation
 
-final class TranscriptionClient: @unchecked Sendable {
+protocol AudioTranscribing: AnyObject, Sendable {
+    func transcribe(audio: RecordedAudio) async throws -> TranscriptionResult
+}
+
+final class TranscriptionClient: AudioTranscribing, @unchecked Sendable {
     enum Error: Swift.Error, Equatable {
         case missingAuthToken
         case unsupportedAuthMethod

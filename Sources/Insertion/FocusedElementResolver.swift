@@ -4,8 +4,10 @@ import Foundation
 @MainActor
 protocol FocusedTextElement: AnyObject {
     var isWritable: Bool { get }
-    var value: String? { get set }
-    var selectedRange: NSRange? { get set }
+    var value: String? { get }
+    var selectedRange: NSRange? { get }
+    func setValue(_ newValue: String) -> Bool
+    func setSelectedRange(_ newValue: NSRange) -> Bool
 }
 
 @MainActor
@@ -55,61 +57,56 @@ private final class AXFocusedTextElement: FocusedTextElement {
     }
 
     var value: String? {
-        get {
-            var rawValue: CFTypeRef?
-            let status = AXUIElementCopyAttributeValue(
-                element,
-                kAXValueAttribute as CFString,
-                &rawValue
-            )
+        var rawValue: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &rawValue
+        )
 
-            guard status == .success else { return nil }
-            return rawValue as? String
-        }
-        set {
-            guard let newValue else { return }
-            AXUIElementSetAttributeValue(
-                element,
-                kAXValueAttribute as CFString,
-                newValue as CFTypeRef
-            )
-        }
+        guard status == .success else { return nil }
+        return rawValue as? String
+    }
+
+    func setValue(_ newValue: String) -> Bool {
+        AXUIElementSetAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            newValue as CFTypeRef
+        ) == .success
     }
 
     var selectedRange: NSRange? {
-        get {
-            var rawValue: CFTypeRef?
-            let status = AXUIElementCopyAttributeValue(
-                element,
-                kAXSelectedTextRangeAttribute as CFString,
-                &rawValue
-            )
+        var rawValue: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rawValue
+        )
 
-            guard status == .success,
-                  let rawValue else {
-                return nil
-            }
-
-            let rangeValue = rawValue as! AXValue
-            guard AXValueGetType(rangeValue) == .cfRange else {
-                return nil
-            }
-
-            var range = CFRange()
-            AXValueGetValue(rangeValue, .cfRange, &range)
-            return NSRange(location: range.location, length: range.length)
+        guard status == .success,
+              let rawValue else {
+            return nil
         }
-        set {
-            guard let newValue else { return }
 
-            var range = CFRange(location: newValue.location, length: newValue.length)
-            guard let rangeValue = AXValueCreate(.cfRange, &range) else { return }
-
-            AXUIElementSetAttributeValue(
-                element,
-                kAXSelectedTextRangeAttribute as CFString,
-                rangeValue
-            )
+        let rangeValue = rawValue as! AXValue
+        guard AXValueGetType(rangeValue) == .cfRange else {
+            return nil
         }
+
+        var range = CFRange()
+        AXValueGetValue(rangeValue, .cfRange, &range)
+        return NSRange(location: range.location, length: range.length)
+    }
+
+    func setSelectedRange(_ newValue: NSRange) -> Bool {
+        var range = CFRange(location: newValue.location, length: newValue.length)
+        guard let rangeValue = AXValueCreate(.cfRange, &range) else { return false }
+
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            rangeValue
+        ) == .success
     }
 }

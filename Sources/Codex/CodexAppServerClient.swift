@@ -119,6 +119,11 @@ actor CodexAppServerClient: CodexAccountReading, CodexAuthProviding {
                     await self?.handle(line: line)
                 }
             }
+            createdTransport.onTermination = { [weak self] detail in
+                Task {
+                    await self?.handleTransportTermination(detail: detail)
+                }
+            }
             try createdTransport.start()
             transport = createdTransport
         } catch let error as CodexProcessManager.Error {
@@ -142,10 +147,15 @@ actor CodexAppServerClient: CodexAccountReading, CodexAuthProviding {
         let line = String(decoding: requestData, as: UTF8.self)
 
         return try await withCheckedThrowingContinuation { continuation in
+            guard let transport else {
+                continuation.resume(throwing: Error.transportFailure("Codex app-server transport is unavailable."))
+                return
+            }
+
             pendingRequests[requestID] = continuation
 
             do {
-                try transport?.write(line: line)
+                try transport.write(line: line)
             } catch {
                 pendingRequests.removeValue(forKey: requestID)
                 continuation.resume(throwing: Error.transportFailure(error.localizedDescription))
@@ -201,6 +211,18 @@ actor CodexAppServerClient: CodexAccountReading, CodexAuthProviding {
             continuation.resume(returning: resultData)
         } catch {
             continuation.resume(throwing: Error.invalidResponse)
+        }
+    }
+
+    private func handleTransportTermination(detail: String?) {
+        let message = detail ?? "Codex app-server closed the connection."
+        let continuations = pendingRequests.values
+        pendingRequests.removeAll()
+        transport = nil
+        initialized = false
+
+        for continuation in continuations {
+            continuation.resume(throwing: Error.transportFailure(message))
         }
     }
 }
