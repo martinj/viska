@@ -140,9 +140,9 @@ private final class FakeAudioCaptureEngine: AudioCaptureControlling {
         self.recordedAudio = recordedAudio
     }
 
-    func startCapture(levelHandler: @escaping (Float) -> Void) throws {
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
         isCapturing = true
-        levelHandler(0.5)
+        levelHandler([Float](repeating: 0.5, count: AudioLevelAnalyzer.bandCount))
     }
 
     func stopCapture() throws -> RecordedAudio {

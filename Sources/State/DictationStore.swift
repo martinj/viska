@@ -145,22 +145,23 @@ final class DictationStore: ObservableObject {
     private func stopRecordingIfNeeded() {
         guard case .recording = state else { return }
 
-        overlayController?.hide()
-
         do {
             lastRecordedAudio = try audioCaptureEngine?.stopCapture()
             lifecycle?.recordingDidStop()
 
             if let transcriptionClient, let lastRecordedAudio {
                 state = .transcribing
+                overlayController?.showTranscribing()
                 pendingTranscriptionTask?.cancel()
                 pendingTranscriptionTask = Task { [weak self] in
                     await self?.transcribe(audio: lastRecordedAudio, client: transcriptionClient)
                 }
             } else {
+                overlayController?.hide()
                 state = .idle
             }
         } catch {
+            overlayController?.hide()
             setUnavailable(title: "Recording Failed", message: "Recording could not be finalized.")
         }
     }
@@ -191,6 +192,7 @@ final class DictationStore: ObservableObject {
     private func transcribe(audio: RecordedAudio, client: any AudioTranscribing) async {
         do {
             let result = try await client.transcribe(audio: audio)
+            overlayController?.hide()
             lastTranscript = result.text
             if let textInsertionService {
                 state = .inserting
@@ -204,6 +206,7 @@ final class DictationStore: ObservableObject {
             }
             state = .idle
         } catch let error as TranscriptionClient.Error {
+            overlayController?.hide()
             switch error {
             case .missingAuthToken:
                 setUnavailable(
@@ -232,6 +235,7 @@ final class DictationStore: ObservableObject {
                 )
             }
         } catch {
+            overlayController?.hide()
             setUnavailable(
                 title: "Transcription Failed",
                 message: "Transcription failed: \(error.localizedDescription)"
@@ -265,8 +269,8 @@ final class DictationStore: ObservableObject {
 
     private func performRecordingStart() {
         do {
-            try audioCaptureEngine?.startCapture { [weak self] level in
-                self?.overlayController?.update(level: level)
+            try audioCaptureEngine?.startCapture { [weak self] levels in
+                self?.overlayController?.update(levels: levels)
             }
             overlayController?.show()
             let mode = settingsStore.preferences.recordingMode

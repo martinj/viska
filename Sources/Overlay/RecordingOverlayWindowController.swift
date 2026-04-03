@@ -4,7 +4,8 @@ import SwiftUI
 @MainActor
 protocol RecordingOverlayControlling: AnyObject {
     func show()
-    func update(level: Float)
+    func update(levels: [Float])
+    func showTranscribing()
     func hide()
 }
 
@@ -14,7 +15,7 @@ final class RecordingOverlayWindowController: NSWindowController, RecordingOverl
 
     init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 260, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 52),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -49,13 +50,18 @@ final class RecordingOverlayWindowController: NSWindowController, RecordingOverl
             y: frame.minY + 40
         )
 
-        model.level = 0
+        model.phase = .recording
+        model.levels = [CGFloat](repeating: 0, count: AudioLevelAnalyzer.bandCount)
         window.setFrameOrigin(origin)
         window.orderFrontRegardless()
     }
 
-    func update(level: Float) {
-        model.level = CGFloat(min(max(level, 0), 1))
+    func update(levels: [Float]) {
+        model.levels = levels.map { CGFloat(min(max($0, 0), 1)) }
+    }
+
+    func showTranscribing() {
+        model.phase = .transcribing
     }
 
     func hide() {

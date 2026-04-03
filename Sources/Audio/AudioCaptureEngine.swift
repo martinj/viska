@@ -9,7 +9,7 @@ struct RecordedAudio: Equatable {
 
 @MainActor
 protocol AudioCaptureControlling: AnyObject {
-    func startCapture(levelHandler: @escaping (Float) -> Void) throws
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws
     func stopCapture() throws -> RecordedAudio
     func cancelCapture()
 }
@@ -35,7 +35,7 @@ final class AudioCaptureEngine: AudioCaptureControlling {
         self.fileManager = fileManager
     }
 
-    func startCapture(levelHandler: @escaping (Float) -> Void) throws {
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
         guard !isCapturing else { throw Error.alreadyCapturing }
 
         let inputNode = engine.inputNode
@@ -106,10 +106,10 @@ final class AudioCaptureEngine: AudioCaptureControlling {
     nonisolated private static func makeTapBlock(captureSession: CaptureSession) -> AVAudioNodeTapBlock {
         { buffer, _ in
             let convertedSamples = convertToPCM16Mono(buffer: buffer)
-            let level = AudioLevelAnalyzer.normalizedLevel(for: buffer)
+            let bands = AudioLevelAnalyzer.waveformBands(for: buffer)
 
             captureSession.append(contentsOf: convertedSamples)
-            captureSession.dispatchLevel(level)
+            captureSession.dispatchLevels(bands)
         }
     }
 
@@ -164,22 +164,22 @@ private final class CaptureSession: @unchecked Sendable {
         sampleAccumulator.clear()
     }
 
-    func dispatchLevel(_ level: Float) {
-        levelRelay.dispatch(level)
+    func dispatchLevels(_ levels: [Float]) {
+        levelRelay.dispatch(levels)
     }
 }
 
 private final class MainQueueLevelRelay: @unchecked Sendable {
-    private let levelHandler: (Float) -> Void
+    private let levelHandler: ([Float]) -> Void
 
     @MainActor
-    init(levelHandler: @escaping (Float) -> Void) {
+    init(levelHandler: @escaping ([Float]) -> Void) {
         self.levelHandler = levelHandler
     }
 
-    func dispatch(_ level: Float) {
+    func dispatch(_ levels: [Float]) {
         DispatchQueue.main.async {
-            self.levelHandler(level)
+            self.levelHandler(levels)
         }
     }
 }
