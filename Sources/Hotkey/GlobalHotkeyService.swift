@@ -80,7 +80,19 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         }
     }
 
-    func handle(rawEvent: RawEvent) {
+    nonisolated func handle(rawEvent: RawEvent) {
+        runOnMainActor { service in
+            service.handleRawEventOnMainActor(rawEvent)
+        }
+    }
+
+    nonisolated func handleEscapePressed() {
+        runOnMainActor { service in
+            service.onEvent?(.cancel)
+        }
+    }
+
+    private func handleRawEventOnMainActor(_ rawEvent: RawEvent) {
         switch (recordingMode, rawEvent) {
         case (.holdToRecord, .pressed):
             onEvent?(.pressed)
@@ -93,8 +105,21 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         }
     }
 
-    func handleEscapePressed() {
-        onEvent?(.cancel)
+    nonisolated private func runOnMainActor(
+        _ operation: @escaping @MainActor (GlobalHotkeyService) -> Void
+    ) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { [weak self] in
+                guard let self else { return }
+                operation(self)
+            }
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            operation(self)
+        }
     }
 
     private func installEscapeMonitorsIfNeeded() {

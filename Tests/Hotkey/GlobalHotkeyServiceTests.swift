@@ -38,6 +38,17 @@ final class GlobalHotkeyServiceTests: XCTestCase {
         XCTAssertEqual(events, [.toggle, .toggle])
     }
 
+    func testEscapePressEmitsCancelEvent() {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        var events: [GlobalHotkeyService.Event] = []
+        service.onEvent = { events.append($0) }
+
+        service.handleEscapePressed()
+
+        XCTAssertEqual(events, [.cancel])
+    }
+
     func testDescriptorWithoutRequiredModifierIsRejected() {
         let registrar = FakeGlobalHotkeyRegistrar()
         let service = GlobalHotkeyService(registrar: registrar)
