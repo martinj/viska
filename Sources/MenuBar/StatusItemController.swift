@@ -14,7 +14,7 @@ final class StatusItemController: NSObject {
 
     func install() {
         popover.behavior = .transient
-        popover.animates = true
+        popover.animates = false
         popover.contentSize = NSSize(width: 300, height: 320)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
@@ -35,14 +35,20 @@ final class StatusItemController: NSObject {
 
     @objc
     nonisolated private func togglePopover(_ sender: NSStatusBarButton) {
-        MainActor.assumeIsolated {
-            if popover.isShown {
-                popover.performClose(sender)
-                return
-            }
-
-            popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+        Task { @MainActor [weak self] in
+            self?.togglePopoverOnMainActor()
         }
+    }
+
+    private func togglePopoverOnMainActor() {
+        guard let button = statusItem.button else { return }
+
+        if popover.isShown {
+            popover.performClose(button)
+            return
+        }
+
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
     }
 }
