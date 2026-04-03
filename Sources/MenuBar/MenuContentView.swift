@@ -6,61 +6,126 @@ struct MenuContentView: View {
     @ObservedObject var dictationStore: DictationStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("VoiceCompanion")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 10) {
+                Image(systemName: "mic.badge.xmark")
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(.primary)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 32, height: 32)
 
-                Text("Global hotkey dictation companion for any focused macOS app.")
-                    .font(.subheadline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VoiceCompanion")
+                        .font(.system(size: 14, weight: .semibold))
+
+                    Text("Global hotkey dictation")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer()
+
+                statusBadge
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            Divider()
+                .padding(.horizontal, 12)
+
+            // Status detail
+            if case .unavailable = dictationStore.state {
+                Text(dictationStore.state.detail)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
             }
 
-            GroupBox("Status") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(dictationStore.state.statusTitle, systemImage: statusSymbolName)
-                        .foregroundStyle(statusColor)
+            if let hotkeyErrorMessage = dictationStore.hotkeyErrorMessage {
+                Label(hotkeyErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+            }
 
-                    Text(dictationStore.state.detail)
-                        .font(.footnote)
+            // Settings sections
+            VStack(alignment: .leading, spacing: 16) {
+                // Recording mode section
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recording Mode")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
 
-                    if let hotkeyErrorMessage = dictationStore.hotkeyErrorMessage {
-                        Text(hotkeyErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
+                    Picker("Recording mode", selection: recordingModeBinding) {
+                        ForEach(RecordingMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                // Hotkey section
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Shortcut")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    HotkeyRecorderView(currentHotkey: settingsStore.preferences.hotkey) { descriptor in
+                        dictationStore.updateHotkey(descriptor)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            GroupBox("Recording mode") {
-                Picker("Recording mode", selection: recordingModeBinding) {
-                    ForEach(RecordingMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-
-            GroupBox("Hotkey") {
-                HotkeyRecorderView(currentHotkey: settingsStore.preferences.hotkey) { descriptor in
-                    dictationStore.updateHotkey(descriptor)
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
 
             Spacer(minLength: 0)
 
             Divider()
+                .padding(.horizontal, 12)
 
-            Button("Quit VoiceCompanion") {
+            Button {
                 NSApp.terminate(nil)
+            } label: {
+                HStack {
+                    Text("Quit")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Text("⌘Q")
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
-        .padding(16)
-        .frame(width: 340, height: 360, alignment: .topLeading)
+        .frame(width: 300, height: 320, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 7, height: 7)
+            Text(dictationStore.state.statusTitle)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(statusColor.opacity(0.1), in: Capsule())
     }
 
     private var recordingModeBinding: Binding<RecordingMode> {

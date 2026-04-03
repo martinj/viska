@@ -15,7 +15,7 @@ final class StatusItemController: NSObject {
     func install() {
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 340, height: 360)
+        popover.contentSize = NSSize(width: 300, height: 320)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
                 settingsStore: dependencies.settingsStore,

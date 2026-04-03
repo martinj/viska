@@ -9,21 +9,34 @@ struct HotkeyRecorderView: View {
     @StateObject private var coordinator = HotkeyCaptureCoordinator()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             Button {
                 coordinator.toggleCapture(onHotkeyChange: onHotkeyChange)
             } label: {
-                HStack {
+                HStack(spacing: 6) {
                     Text(coordinator.isCapturing ? "Press shortcut…" : currentHotkey.displayString)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(coordinator.isCapturing ? .secondary : .primary)
                     Spacer()
                     Image(systemName: coordinator.isCapturing ? "record.circle.fill" : "keyboard")
+                        .font(.system(size: 11))
+                        .foregroundStyle(coordinator.isCapturing ? Color.red : Color.secondary)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(coordinator.isCapturing ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
+                )
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
 
-            Text(coordinator.helpText ?? "Choose a modifier-based shortcut for global dictation.")
-                .font(.footnote)
-                .foregroundStyle(coordinator.errorMessage == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
+            if let errorMessage = coordinator.errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+            }
         }
         .onDisappear {
             coordinator.stopCapture()
