@@ -66,9 +66,10 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
 
         do {
             registration?.invalidate()
-            registration = try registrar.register(descriptor: descriptor) { [weak self] rawEvent in
-                self?.handle(rawEvent: rawEvent)
-            }
+            registration = try registrar.register(
+                descriptor: descriptor,
+                handler: makeRawEventHandler()
+            )
             recordingMode = mode
         } catch let error as GlobalHotkeyRegistrarError {
             switch error {
@@ -108,14 +109,6 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
     nonisolated private func runOnMainActor(
         _ operation: @escaping @MainActor (GlobalHotkeyService) -> Void
     ) {
-        if Thread.isMainThread {
-            MainActor.assumeIsolated { [weak self] in
-                guard let self else { return }
-                operation(self)
-            }
-            return
-        }
-
         Task { @MainActor [weak self] in
             guard let self else { return }
             operation(self)
@@ -125,7 +118,25 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
     private func installEscapeMonitorsIfNeeded() {
         guard localEscapeMonitor == nil, globalEscapeMonitor == nil else { return }
 
-        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown],
+            handler: makeLocalEscapeMonitorHandler()
+        )
+
+        globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.keyDown],
+            handler: makeGlobalEscapeMonitorHandler()
+        )
+    }
+
+    nonisolated func makeRawEventHandler() -> (RawEvent) -> Void {
+        { [weak self] rawEvent in
+            self?.handle(rawEvent: rawEvent)
+        }
+    }
+
+    nonisolated func makeLocalEscapeMonitorHandler() -> (NSEvent) -> NSEvent? {
+        { [weak self] event in
             guard event.keyCode == UInt16(kVK_Escape) else {
                 return event
             }
@@ -133,8 +144,10 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
             self?.handleEscapePressed()
             return nil
         }
+    }
 
-        globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+    nonisolated func makeGlobalEscapeMonitorHandler() -> (NSEvent) -> Void {
+        { [weak self] event in
             guard event.keyCode == UInt16(kVK_Escape) else { return }
             self?.handleEscapePressed()
         }
