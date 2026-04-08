@@ -23,57 +23,80 @@ final class AudioCaptureEngine: AudioCaptureControlling {
         case nothingCaptured
     }
 
-    private let engine = AVAudioEngine()
     private let wavEncoder = WAVEncoder()
     private let fileManager: FileManager
+    private let engineFactory: () -> AVAudioEngine
 
+    private var engine: AVAudioEngine?
     private var currentSampleRate = 16_000
     private var captureSession: CaptureSession?
     private var isCapturing = false
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        engineFactory: @escaping () -> AVAudioEngine = AVAudioEngine.init
+    ) {
         self.fileManager = fileManager
+        self.engineFactory = engineFactory
     }
 
     func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
         guard !isCapturing else { throw Error.alreadyCapturing }
 
+        let engine = engineFactory()
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
+        let nodeOutputFormat = inputNode.outputFormat(forBus: 0)
 
-        guard inputFormat.channelCount > 0 else {
+        guard hardwareInputFormat.channelCount > 0 else {
             throw Error.inputUnavailable
         }
 
-        currentSampleRate = Int(inputFormat.sampleRate.rounded())
+        let tapFormat = Self.captureFormat(
+            hardwareInputFormat: hardwareInputFormat,
+            nodeOutputFormat: nodeOutputFormat
+        )
+        currentSampleRate = Int(tapFormat.sampleRate.rounded())
         let captureSession = CaptureSession(levelRelay: MainQueueLevelRelay(levelHandler: levelHandler))
+        self.engine = engine
         self.captureSession = captureSession
 
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 1_024,
-            format: inputFormat,
-            block: Self.makeTapBlock(captureSession: captureSession)
-        )
+        do {
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(
+                onBus: 0,
+                bufferSize: 1_024,
+                format: tapFormat,
+                block: Self.makeTapBlock(captureSession: captureSession)
+            )
 
-        engine.prepare()
-        try engine.start()
-        isCapturing = true
+            engine.prepare()
+            try engine.start()
+            isCapturing = true
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            engine.stop()
+            engine.reset()
+            self.engine = nil
+            self.captureSession = nil
+            throw error
+        }
     }
 
     func stopCapture() throws -> RecordedAudio {
-        guard isCapturing else { throw Error.nothingCaptured }
+        guard isCapturing, let engine else { throw Error.nothingCaptured }
 
         let inputNode = engine.inputNode
         inputNode.removeTap(onBus: 0)
         engine.stop()
+        engine.reset()
         isCapturing = false
 
         guard let captureSession else {
             throw Error.nothingCaptured
         }
 
+        self.engine = nil
         self.captureSession = nil
 
         let samples = captureSession.snapshot()
@@ -96,11 +119,34 @@ final class AudioCaptureEngine: AudioCaptureControlling {
     }
 
     func cancelCapture() {
+        guard let engine else {
+            isCapturing = false
+            captureSession?.clear()
+            captureSession = nil
+            return
+        }
+
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        engine.reset()
+        self.engine = nil
         isCapturing = false
         captureSession?.clear()
         captureSession = nil
+    }
+
+    nonisolated static func captureFormat(
+        hardwareInputFormat: AVAudioFormat,
+        nodeOutputFormat: AVAudioFormat
+    ) -> AVAudioFormat {
+        let hasMatchingSampleRate = hardwareInputFormat.sampleRate == nodeOutputFormat.sampleRate
+        let hasMatchingChannelCount = hardwareInputFormat.channelCount == nodeOutputFormat.channelCount
+
+        guard hasMatchingSampleRate, hasMatchingChannelCount else {
+            return hardwareInputFormat
+        }
+
+        return nodeOutputFormat
     }
 
     nonisolated private static func makeTapBlock(captureSession: CaptureSession) -> AVAudioNodeTapBlock {
