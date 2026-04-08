@@ -1,6 +1,6 @@
 import AVFoundation
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 @MainActor
 final class PermissionCoordinatorTests: XCTestCase {

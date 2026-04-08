@@ -1,7 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 @MainActor
 final class GlobalHotkeyServiceTests: XCTestCase {

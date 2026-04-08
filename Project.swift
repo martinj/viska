@@ -1,7 +1,7 @@
 import ProjectDescription
 
 let project = Project(
-    name: "VoiceCompanion",
+    name: "Viska",
     settings: .settings(
         base: [
             "SWIFT_VERSION": "6.0",
@@ -10,32 +10,32 @@ let project = Project(
     ),
     targets: [
         .target(
-            name: "VoiceCompanion",
+            name: "Viska",
             destinations: .macOS,
             product: .app,
-            bundleId: "com.martinjonsson.VoiceCompanion",
+            bundleId: "com.martinjonsson.Viska",
             deploymentTargets: .macOS("15.0"),
             infoPlist: .extendingDefault(with: [
-                "CFBundleDisplayName": "VoiceCompanion",
+                "CFBundleDisplayName": "Viska",
                 "LSUIElement": true,
-                "NSMicrophoneUsageDescription": "VoiceCompanion records short dictation clips for transcription.",
+                "NSMicrophoneUsageDescription": "Viska records short dictation clips for transcription.",
             ]),
             buildableFolders: [
                 "Sources",
             ]
         ),
         .target(
-            name: "VoiceCompanionTests",
+            name: "ViskaTests",
             destinations: .macOS,
             product: .unitTests,
-            bundleId: "com.martinjonsson.VoiceCompanionTests",
+            bundleId: "com.martinjonsson.ViskaTests",
             deploymentTargets: .macOS("15.0"),
             infoPlist: .default,
             buildableFolders: [
                 "Tests",
             ],
             dependencies: [
-                .target(name: "VoiceCompanion"),
+                .target(name: "Viska"),
             ]
         ),
     ]

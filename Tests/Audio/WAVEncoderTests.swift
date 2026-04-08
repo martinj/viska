@@ -1,5 +1,5 @@
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 final class WAVEncoderTests: XCTestCase {
     func testEncodesPCM16WaveHeaderAndData() {

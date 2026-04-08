@@ -16,7 +16,7 @@ struct MenuContentView: View {
                     .frame(width: 32, height: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("VoiceCompanion")
+                    Text("Viska")
                         .font(.system(size: 14, weight: .semibold))
 
                     Text("Global hotkey dictation")

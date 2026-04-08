@@ -83,7 +83,7 @@ final class AudioCaptureEngine: AudioCaptureControlling {
 
         let wavData = wavEncoder.encodePCM16(samples: samples, sampleRate: currentSampleRate)
         let outputURL = fileManager.temporaryDirectory
-            .appendingPathComponent("voice-companion-\(UUID().uuidString)")
+            .appendingPathComponent("viska-\(UUID().uuidString)")
             .appendingPathExtension("wav")
 
         try wavData.write(to: outputURL, options: .atomic)
@@ -185,7 +185,7 @@ private final class MainQueueLevelRelay: @unchecked Sendable {
 }
 
 private final class SampleAccumulator: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "voice-companion.audio-capture")
+    private let queue = DispatchQueue(label: "viska.audio-capture")
     private var samples: [Int16] = []
 
     func append(contentsOf newSamples: [Int16]) {

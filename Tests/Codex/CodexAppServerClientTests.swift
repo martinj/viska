@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 final class CodexAppServerClientTests: XCTestCase {
     func testGetAccountInitializesConnectionBeforeAccountRead() async throws {
@@ -16,7 +16,7 @@ final class CodexAppServerClientTests: XCTestCase {
             case "initialize":
                 transport.onLine?(
                     """
-                    {"id":\(id!),"result":{"userAgent":"VoiceCompanion/0.1","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
+                    {"id":\(id!),"result":{"userAgent":"Viska/0.1","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
                     """
                 )
             case "account/read":
@@ -49,7 +49,7 @@ final class CodexAppServerClientTests: XCTestCase {
             case "initialize":
                 transport.onLine?(
                     """
-                    {"id":\(id!),"result":{"userAgent":"VoiceCompanion/0.1","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
+                    {"id":\(id!),"result":{"userAgent":"Viska/0.1","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
                     """
                 )
             case "account/read":

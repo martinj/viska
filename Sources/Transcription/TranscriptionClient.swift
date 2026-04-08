@@ -22,7 +22,7 @@ final class TranscriptionClient: AudioTranscribing, @unchecked Sendable {
         authProvider: any CodexAuthProviding,
         session: URLSession = .shared,
         baseURL: URL = URL(string: "https://chatgpt.com/backend-api/")!,
-        userAgent: String = "VoiceCompanion/0.1"
+        userAgent: String = "Viska/0.1"
     ) {
         self.authProvider = authProvider
         self.session = session

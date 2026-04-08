@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 final class TranscriptionClientTests: XCTestCase {
     override class func tearDown() {
@@ -49,7 +49,7 @@ final class TranscriptionClientTests: XCTestCase {
             authProvider: authProvider,
             session: session,
             baseURL: URL(string: "https://chatgpt.com/backend-api/")!,
-            userAgent: "VoiceCompanionTests/1.0"
+            userAgent: "ViskaTests/1.0"
         )
 
         let result = try await client.transcribe(
@@ -78,7 +78,7 @@ final class TranscriptionClientTests: XCTestCase {
             authProvider: authProvider,
             session: session,
             baseURL: URL(string: "https://chatgpt.com/backend-api/")!,
-            userAgent: "VoiceCompanionTests/1.0"
+            userAgent: "ViskaTests/1.0"
         )
 
         await XCTAssertThrowsErrorAsync(

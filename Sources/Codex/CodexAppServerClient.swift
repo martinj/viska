@@ -95,8 +95,8 @@ actor CodexAppServerClient: CodexAccountReading, CodexAuthProviding {
 
         let params: [String: Any] = [
             "clientInfo": [
-                "name": "voice_companion",
-                "title": "VoiceCompanion",
+                "name": "viska",
+                "title": "Viska",
                 "version": "0.1.0",
             ],
             "capabilities": [

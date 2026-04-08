@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="VoiceCompanion"
+APP_NAME="Viska"
 DERIVED_DATA_PATH="$ROOT_DIR/.build/DerivedData"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug/$APP_NAME.app"
 

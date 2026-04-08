@@ -8,7 +8,7 @@ final class SettingsStore: ObservableObject {
     private let userDefaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private let key = "voice-companion.preferences"
+    private let key = "viska.preferences"
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults

@@ -26,7 +26,7 @@ final class StatusItemController: NSObject {
         guard let button = statusItem.button else { return }
         button.image = NSImage(
             systemSymbolName: "mic.fill",
-            accessibilityDescription: "VoiceCompanion"
+            accessibilityDescription: "Viska"
         )
         button.action = #selector(togglePopover(_:))
         button.target = self

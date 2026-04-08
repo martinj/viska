@@ -1,5 +1,5 @@
 import XCTest
-@testable import VoiceCompanion
+@testable import Viska
 
 @MainActor
 final class CodexAuthStatusMonitorTests: XCTestCase {
