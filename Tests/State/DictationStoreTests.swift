@@ -70,8 +70,51 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
     }
 
+    func testEmptyRecordingFinalizationReturnsToIdleAndAllowsAnotherRecording() {
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(stopError: AudioCaptureEngine.Error.nothingCaptured)
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        XCTAssertEqual(context.store.state, .idle)
+        XCTAssertEqual(context.lifecycle.events, [.started])
+
+        context.store.handleHotkeyEvent(.pressed)
+
+        XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
+    func testReleaseCancelsPendingPermissionStart() async {
+        let permissionCoordinator = FakePermissionCoordinator(
+            microphoneStatus: .notDetermined,
+            requestedPermissionResult: true
+        )
+        let audioCaptureEngine = FakeAudioCaptureEngine()
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator,
+            audioCaptureEngine: audioCaptureEngine
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        await permissionCoordinator.finishRequest()
+        await Task.yield()
+
+        XCTAssertEqual(context.store.state, .idle)
+        XCTAssertEqual(context.lifecycle.events, [])
+        XCTAssertEqual(audioCaptureEngine.startCaptureCallCount, 0)
+    }
+
     private func makeContext(
         mode: RecordingMode,
+        permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
         transcriptionClient: (any AudioTranscribing)? = nil,
         textInsertionService: (any TextInserting)? = nil
@@ -85,6 +128,7 @@ final class DictationStoreTests: XCTestCase {
         let store = DictationStore(
             settingsStore: settingsStore,
             hotkeyService: hotkeyService,
+            permissionCoordinator: permissionCoordinator,
             audioCaptureEngine: audioCaptureEngine,
             transcriptionClient: transcriptionClient,
             textInsertionService: textInsertionService,
@@ -133,20 +177,32 @@ private struct StoreContext {
 
 @MainActor
 private final class FakeAudioCaptureEngine: AudioCaptureControlling {
-    private let recordedAudio: RecordedAudio
+    private let recordedAudio: RecordedAudio?
+    private let stopError: Swift.Error?
+    private(set) var startCaptureCallCount = 0
     private(set) var isCapturing = false
 
-    init(recordedAudio: RecordedAudio) {
+    init(recordedAudio: RecordedAudio? = nil, stopError: Swift.Error? = nil) {
         self.recordedAudio = recordedAudio
+        self.stopError = stopError
     }
 
     func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
+        startCaptureCallCount += 1
         isCapturing = true
         levelHandler([Float](repeating: 0.5, count: AudioLevelAnalyzer.bandCount))
     }
 
     func stopCapture() throws -> RecordedAudio {
         isCapturing = false
+        if let stopError {
+            throw stopError
+        }
+
+        guard let recordedAudio else {
+            throw AudioCaptureEngine.Error.nothingCaptured
+        }
+
         return recordedAudio
     }
 
@@ -177,6 +233,42 @@ private final class FakeTextInsertionService: TextInserting {
 
     func insert(_ text: String) async -> TextInsertionOutcome {
         outcome
+    }
+}
+
+@MainActor
+private final class FakePermissionCoordinator: PermissionCoordinating {
+    private let currentMicrophoneStatus: PermissionStatus
+    private let requestedPermissionResult: Bool
+    private var permissionContinuation: CheckedContinuation<Bool, Never>?
+
+    init(microphoneStatus: PermissionStatus, requestedPermissionResult: Bool = false) {
+        self.currentMicrophoneStatus = microphoneStatus
+        self.requestedPermissionResult = requestedPermissionResult
+    }
+
+    func microphoneStatus() -> PermissionStatus {
+        currentMicrophoneStatus
+    }
+
+    func requestMicrophonePermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            permissionContinuation = continuation
+        }
+    }
+
+    func finishRequest() async {
+        permissionContinuation?.resume(returning: requestedPermissionResult)
+        permissionContinuation = nil
+        await Task.yield()
+    }
+
+    func accessibilityStatus() -> PermissionStatus {
+        .granted
+    }
+
+    func requestAccessibilityPermission(prompt: Bool) -> Bool {
+        true
     }
 }
 

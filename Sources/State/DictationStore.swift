@@ -131,6 +131,21 @@ final class DictationStore: ObservableObject {
     private func startRecordingIfPossible() {
         guard case .idle = state else { return }
 
+        let microphoneMessage = "Microphone permission is required before dictation can record."
+
+        if let permissionCoordinator {
+            switch permissionCoordinator.microphoneStatus() {
+            case .granted:
+                performRecordingStart()
+                return
+            case .denied, .restricted:
+                setUnavailable(title: "Microphone Required", message: microphoneMessage)
+                return
+            case .notDetermined:
+                break
+            }
+        }
+
         if permissionCoordinator == nil {
             performRecordingStart()
             return
@@ -143,6 +158,12 @@ final class DictationStore: ObservableObject {
     }
 
     private func stopRecordingIfNeeded() {
+        if pendingStartTask != nil {
+            pendingStartTask?.cancel()
+            pendingStartTask = nil
+            return
+        }
+
         guard case .recording = state else { return }
 
         do {
@@ -160,6 +181,10 @@ final class DictationStore: ObservableObject {
                 overlayController?.hide()
                 state = .idle
             }
+        } catch AudioCaptureEngine.Error.nothingCaptured {
+            overlayController?.hide()
+            lastRecordedAudio = nil
+            state = .idle
         } catch {
             overlayController?.hide()
             setUnavailable(title: "Recording Failed", message: "Recording could not be finalized.")
@@ -244,18 +269,26 @@ final class DictationStore: ObservableObject {
     }
 
     private func beginRecording() async {
+        defer {
+            pendingStartTask = nil
+        }
+
+        guard !Task.isCancelled else { return }
+
         let microphoneMessage = "Microphone permission is required before dictation can record."
 
         if let permissionCoordinator {
             switch permissionCoordinator.microphoneStatus() {
-            case .granted:
-                performRecordingStart()
-                return
             case .notDetermined:
                 guard await permissionCoordinator.requestMicrophonePermission() else {
                     setUnavailable(title: "Microphone Required", message: microphoneMessage)
                     return
                 }
+
+                guard !Task.isCancelled else { return }
+                performRecordingStart()
+                return
+            case .granted:
                 performRecordingStart()
                 return
             case .denied, .restricted:
