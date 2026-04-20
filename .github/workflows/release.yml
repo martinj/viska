@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Release
+    runs-on: macos-26
+
+    steps:
+      - name: Resolve release tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install tools
+        uses: jdx/mise-action@v2
+
+      - name: Generate project
+        run: TUIST_SKIP_UPDATE_CHECK=1 tuist generate --no-open
+
+      - name: Run unit tests
+        run: |
+          TUIST_SKIP_UPDATE_CHECK=1 tuist xcodebuild test \
+            -scheme Viska \
+            -configuration Debug \
+            -derivedDataPath "$PWD/.build/DerivedData-tests"
+
+      - name: Build unsigned release app
+        run: |
+          TUIST_SKIP_UPDATE_CHECK=1 tuist xcodebuild build \
+            -scheme Viska \
+            -configuration Release \
+            -derivedDataPath "$PWD/.build/DerivedData-release" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package app
+        run: |
+          APP_PATH="$PWD/.build/DerivedData-release/Build/Products/Release/Viska.app"
+          test -d "$APP_PATH"
+
+          mkdir -p dist
+          ditto -c -k --keepParent "$APP_PATH" "dist/Viska-${RELEASE_TAG}.zip"
+
+      - name: Create GitHub release
+        run: |
+          ASSET_PATH="dist/Viska-${RELEASE_TAG}.zip"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ASSET_PATH" --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "$ASSET_PATH" \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
