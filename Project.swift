@@ -20,9 +20,17 @@ let project = Project(
                 "LSUIElement": true,
                 "NSMicrophoneUsageDescription": "Viska records short dictation clips for transcription.",
             ]),
+            resources: [
+                "Resources/**",
+            ],
             buildableFolders: [
                 "Sources",
-            ]
+            ],
+            settings: .settings(
+                base: [
+                    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+                ]
+            )
         ),
         .target(
             name: "ViskaTests",
