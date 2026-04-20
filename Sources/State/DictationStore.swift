@@ -73,6 +73,10 @@ final class DictationStore: ObservableObject {
         state = .unavailable(title: title, message: message)
     }
 
+    func setFailed(title: String, message: String) {
+        state = .failed(title: title, message: message)
+    }
+
     func enterTranscribing() {
         state = .transcribing
     }
@@ -129,7 +133,7 @@ final class DictationStore: ObservableObject {
     }
 
     private func startRecordingIfPossible() {
-        guard case .idle = state else { return }
+        guard canStartRecording else { return }
 
         let microphoneMessage = "Microphone permission is required before dictation can record."
 
@@ -205,7 +209,7 @@ final class DictationStore: ObservableObject {
 
     private func toggleRecording() {
         switch state {
-        case .idle:
+        case .idle, .failed:
             startRecordingIfPossible()
         case .recording:
             stopRecordingIfNeeded()
@@ -244,24 +248,24 @@ final class DictationStore: ObservableObject {
                     message: "Codex is signed in with an unsupported auth method."
                 )
             case .httpStatus(let status):
-                setUnavailable(
+                setFailed(
                     title: "Transcription Failed",
                     message: "Transcription failed with HTTP \(status)."
                 )
             case .invalidResponse:
-                setUnavailable(
+                setFailed(
                     title: "Transcription Failed",
                     message: "Transcription returned an invalid response."
                 )
             case .requestFailed(let message):
-                setUnavailable(
+                setFailed(
                     title: "Transcription Failed",
                     message: "Transcription request failed: \(message)"
                 )
             }
         } catch {
             overlayController?.hide()
-            setUnavailable(
+            setFailed(
                 title: "Transcription Failed",
                 message: "Transcription failed: \(error.localizedDescription)"
             )
@@ -311,6 +315,15 @@ final class DictationStore: ObservableObject {
             lifecycle?.recordingDidStart()
         } catch {
             setUnavailable(title: "Recording Failed", message: "Microphone capture failed to start.")
+        }
+    }
+
+    private var canStartRecording: Bool {
+        switch state {
+        case .idle, .failed:
+            true
+        case .unavailable, .recording, .transcribing, .inserting:
+            false
         }
     }
 

@@ -2,6 +2,7 @@ import Foundation
 
 enum DictationState: Equatable {
     case unavailable(title: String, message: String)
+    case failed(title: String, message: String)
     case idle
     case recording(mode: RecordingMode)
     case transcribing
@@ -10,6 +11,8 @@ enum DictationState: Equatable {
     var statusTitle: String {
         switch self {
         case .unavailable(let title, _):
+            title
+        case .failed(let title, _):
             title
         case .idle:
             "Ready"
@@ -25,6 +28,8 @@ enum DictationState: Equatable {
     var detail: String {
         switch self {
         case .unavailable(_, let message):
+            message
+        case .failed(_, let message):
             message
         case .idle:
             "Global dictation is armed and waiting for the configured shortcut."

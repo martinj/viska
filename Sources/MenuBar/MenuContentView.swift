@@ -36,7 +36,7 @@ struct MenuContentView: View {
                 .padding(.horizontal, 12)
 
             // Status detail
-            if case .unavailable = dictationStore.state {
+            if shouldShowStatusDetail {
                 Text(dictationStore.state.detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -137,7 +137,7 @@ struct MenuContentView: View {
 
     private var statusSymbolName: String {
         switch dictationStore.state {
-        case .unavailable:
+        case .unavailable, .failed:
             "exclamationmark.triangle.fill"
         case .idle:
             "checkmark.circle.fill"
@@ -152,7 +152,7 @@ struct MenuContentView: View {
 
     private var statusColor: Color {
         switch dictationStore.state {
-        case .unavailable:
+        case .unavailable, .failed:
             .orange
         case .idle:
             .green
@@ -160,6 +160,15 @@ struct MenuContentView: View {
             .red
         case .transcribing, .inserting:
             .blue
+        }
+    }
+
+    private var shouldShowStatusDetail: Bool {
+        switch dictationStore.state {
+        case .unavailable, .failed:
+            true
+        case .idle, .recording, .transcribing, .inserting:
+            false
         }
     }
 }

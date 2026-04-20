@@ -70,6 +70,32 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
     }
 
+    func testTranscriptionRequestFailureAllowsAnotherRecording() async throws {
+        let context = try makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(
+                error: TranscriptionClient.Error.requestFailed("The network connection was lost.")
+            )
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        await waitForState(
+            .failed(
+                title: "Transcription Failed",
+                message: "Transcription request failed: The network connection was lost."
+            ),
+            store: context.store
+        )
+
+        context.store.handleHotkeyEvent(.pressed)
+
+        XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
     func testEmptyRecordingFinalizationReturnsToIdleAndAllowsAnotherRecording() {
         let context = makeContext(
             mode: .holdToRecord,
@@ -148,8 +174,17 @@ final class DictationStoreTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
+        await waitForState(.idle, store: store, file: file, line: line)
+    }
+
+    private func waitForState(
+        _ expectedState: DictationState,
+        store: DictationStore,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
         for _ in 0..<50 {
-            if store.state == .idle {
+            if store.state == expectedState {
                 return
             }
 
@@ -157,7 +192,7 @@ final class DictationStoreTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        XCTFail("Timed out waiting for store to return to idle", file: file, line: line)
+        XCTFail("Timed out waiting for store state \(expectedState)", file: file, line: line)
     }
 
     private static func makeRecordedAudio() throws -> RecordedAudio {
@@ -212,14 +247,18 @@ private final class FakeAudioCaptureEngine: AudioCaptureControlling {
 }
 
 private final class FakeTranscriptionClient: AudioTranscribing, @unchecked Sendable {
-    private let result: TranscriptionResult
+    private let result: Result<TranscriptionResult, Swift.Error>
 
     init(result: TranscriptionResult) {
-        self.result = result
+        self.result = .success(result)
+    }
+
+    init(error: Swift.Error) {
+        self.result = .failure(error)
     }
 
     func transcribe(audio: RecordedAudio) async throws -> TranscriptionResult {
-        result
+        try result.get()
     }
 }
 
