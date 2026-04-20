@@ -47,4 +47,26 @@ final class PermissionCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.requestAccessibilityPermission(prompt: true))
         XCTAssertEqual(prompts, [true, false])
     }
+
+    func testOpenPrivacySettingsUsesRequestedPane() {
+        var openedURLs: [URL] = []
+        let coordinator = PermissionCoordinator(
+            microphoneStatusProvider: { .denied },
+            microphoneRequester: { false },
+            accessibilityStatusProvider: { false },
+            accessibilityRequester: { _ in false },
+            privacySettingsOpener: { openedURLs.append($0) }
+        )
+
+        coordinator.openMicrophoneSettings()
+        coordinator.openAccessibilitySettings()
+
+        XCTAssertEqual(
+            openedURLs.map(\.absoluteString),
+            [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ]
+        )
+    }
 }

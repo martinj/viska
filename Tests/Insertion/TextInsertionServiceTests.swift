@@ -219,6 +219,8 @@ private final class FakePermissionCoordinator: PermissionCoordinating {
         true
     }
 
+    func openMicrophoneSettings() {}
+
     func accessibilityStatus() -> PermissionStatus {
         accessibility
     }
@@ -233,4 +235,6 @@ private final class FakePermissionCoordinator: PermissionCoordinating {
 
         return false
     }
+
+    func openAccessibilitySettings() {}
 }

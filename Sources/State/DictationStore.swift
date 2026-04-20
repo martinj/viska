@@ -14,6 +14,8 @@ final class DictationStore: ObservableObject {
     @Published private(set) var hotkeyErrorMessage: String?
     @Published private(set) var lastRecordedAudio: RecordedAudio?
     @Published private(set) var lastTranscript: String?
+    @Published private(set) var microphonePermissionStatus: PermissionStatus = .granted
+    @Published private(set) var accessibilityPermissionStatus: PermissionStatus = .granted
 
     private let settingsStore: SettingsStore
     private let hotkeyService: any GlobalHotkeyControlling
@@ -56,6 +58,7 @@ final class DictationStore: ObservableObject {
         }
 
         configureHotkey(using: settingsStore.preferences)
+        refreshPermissionStatuses()
         observePreferences()
 
         if codexStatusMonitor != nil {
@@ -87,6 +90,48 @@ final class DictationStore: ObservableObject {
 
     func finishActiveWork() {
         state = .idle
+    }
+
+    func refreshPermissionStatuses() {
+        guard let permissionCoordinator else {
+            microphonePermissionStatus = .granted
+            accessibilityPermissionStatus = .granted
+            clearPermissionBlockerIfReady()
+            return
+        }
+
+        microphonePermissionStatus = permissionCoordinator.microphoneStatus()
+        accessibilityPermissionStatus = permissionCoordinator.accessibilityStatus()
+        clearPermissionBlockerIfReady()
+    }
+
+    func requestMicrophonePermission() async {
+        guard let permissionCoordinator else { return }
+
+        refreshPermissionStatuses()
+        switch microphonePermissionStatus {
+        case .granted:
+            return
+        case .notDetermined:
+            _ = await permissionCoordinator.requestMicrophonePermission()
+        case .denied, .restricted:
+            permissionCoordinator.openMicrophoneSettings()
+        }
+
+        refreshPermissionStatuses()
+    }
+
+    func requestAccessibilityPermission() {
+        guard let permissionCoordinator else { return }
+
+        refreshPermissionStatuses()
+        guard accessibilityPermissionStatus != .granted else { return }
+
+        if !permissionCoordinator.requestAccessibilityPermission(prompt: true) {
+            permissionCoordinator.openAccessibilitySettings()
+        }
+
+        refreshPermissionStatuses()
     }
 
     func refreshCodexAvailability() async {
@@ -136,9 +181,10 @@ final class DictationStore: ObservableObject {
         guard canStartRecording else { return }
 
         let microphoneMessage = "Microphone permission is required before dictation can record."
+        refreshPermissionStatuses()
 
-        if let permissionCoordinator {
-            switch permissionCoordinator.microphoneStatus() {
+        if permissionCoordinator != nil {
+            switch microphonePermissionStatus {
             case .granted:
                 performRecordingStart()
                 return
@@ -233,6 +279,7 @@ final class DictationStore: ObservableObject {
                     break
                 }
             }
+            refreshPermissionStatuses()
             state = .idle
         } catch let error as TranscriptionClient.Error {
             overlayController?.hide()
@@ -282,13 +329,16 @@ final class DictationStore: ObservableObject {
         let microphoneMessage = "Microphone permission is required before dictation can record."
 
         if let permissionCoordinator {
-            switch permissionCoordinator.microphoneStatus() {
+            refreshPermissionStatuses()
+            switch microphonePermissionStatus {
             case .notDetermined:
                 guard await permissionCoordinator.requestMicrophonePermission() else {
+                    refreshPermissionStatuses()
                     setUnavailable(title: "Microphone Required", message: microphoneMessage)
                     return
                 }
 
+                refreshPermissionStatuses()
                 guard !Task.isCancelled else { return }
                 performRecordingStart()
                 return
@@ -324,6 +374,21 @@ final class DictationStore: ObservableObject {
             true
         case .unavailable, .recording, .transcribing, .inserting:
             false
+        }
+    }
+
+    private func clearPermissionBlockerIfReady() {
+        guard case .unavailable(let title, _) = state else {
+            return
+        }
+
+        switch title {
+        case "Microphone Required" where microphonePermissionStatus == .granted:
+            state = .idle
+        case "Accessibility Required" where accessibilityPermissionStatus == .granted:
+            state = .idle
+        default:
+            break
         }
     }
 

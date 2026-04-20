@@ -138,6 +138,128 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(audioCaptureEngine.startCaptureCallCount, 0)
     }
 
+    func testMicrophoneSetupRequestsPermissionWithoutStartingRecording() async {
+        let permissionCoordinator = FakePermissionCoordinator(
+            microphoneStatus: .notDetermined,
+            requestedPermissionResult: true
+        )
+        let audioCaptureEngine = FakeAudioCaptureEngine()
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator,
+            audioCaptureEngine: audioCaptureEngine
+        )
+
+        context.store.setReady()
+        let requestTask = Task {
+            await context.store.requestMicrophonePermission()
+        }
+
+        await waitForMicrophonePermissionRequest(permissionCoordinator)
+        await permissionCoordinator.finishRequest()
+        await requestTask.value
+
+        XCTAssertEqual(context.store.microphonePermissionStatus, .granted)
+        XCTAssertEqual(context.store.state, .idle)
+        XCTAssertEqual(context.lifecycle.events, [])
+        XCTAssertEqual(audioCaptureEngine.startCaptureCallCount, 0)
+    }
+
+    func testDeniedMicrophoneSetupOpensSettings() async {
+        let permissionCoordinator = FakePermissionCoordinator(microphoneStatus: .denied)
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator
+        )
+
+        await context.store.requestMicrophonePermission()
+
+        XCTAssertTrue(permissionCoordinator.openedMicrophoneSettings)
+        XCTAssertEqual(context.store.microphonePermissionStatus, .denied)
+    }
+
+    func testRefreshingGrantedMicrophoneClearsStaleMicrophoneBlocker() {
+        let permissionCoordinator = FakePermissionCoordinator(microphoneStatus: .denied)
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator
+        )
+
+        context.store.setUnavailable(
+            title: "Microphone Required",
+            message: "Microphone permission is required before dictation can record."
+        )
+        permissionCoordinator.updateMicrophoneStatus(.granted)
+
+        context.store.refreshPermissionStatuses()
+
+        XCTAssertEqual(context.store.microphonePermissionStatus, .granted)
+        XCTAssertEqual(context.store.state, .idle)
+    }
+
+    func testRefreshingGrantedAccessibilityClearsStaleAccessibilityBlocker() {
+        let permissionCoordinator = FakePermissionCoordinator(
+            microphoneStatus: .granted,
+            accessibilityStatus: .denied
+        )
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator
+        )
+
+        context.store.setUnavailable(
+            title: "Accessibility Required",
+            message: "Accessibility permission is required before text can be inserted."
+        )
+        permissionCoordinator.updateAccessibilityStatus(.granted)
+
+        context.store.refreshPermissionStatuses()
+
+        XCTAssertEqual(context.store.accessibilityPermissionStatus, .granted)
+        XCTAssertEqual(context.store.state, .idle)
+    }
+
+    func testAccessibilitySetupRequestsPermissionWithoutStartingRecording() {
+        let permissionCoordinator = FakePermissionCoordinator(
+            microphoneStatus: .granted,
+            accessibilityStatus: .denied,
+            accessibilityPromptResult: true
+        )
+        let audioCaptureEngine = FakeAudioCaptureEngine()
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator,
+            audioCaptureEngine: audioCaptureEngine
+        )
+
+        context.store.setReady()
+        context.store.requestAccessibilityPermission()
+
+        XCTAssertEqual(permissionCoordinator.requestedAccessibilityPrompts, [true])
+        XCTAssertEqual(context.store.accessibilityPermissionStatus, .granted)
+        XCTAssertEqual(context.store.state, .idle)
+        XCTAssertEqual(context.lifecycle.events, [])
+        XCTAssertEqual(audioCaptureEngine.startCaptureCallCount, 0)
+    }
+
+    func testAccessibilitySetupOpensSettingsWhenPromptDoesNotGrant() {
+        let permissionCoordinator = FakePermissionCoordinator(
+            microphoneStatus: .granted,
+            accessibilityStatus: .denied,
+            accessibilityPromptResult: false
+        )
+        let context = makeContext(
+            mode: .holdToRecord,
+            permissionCoordinator: permissionCoordinator
+        )
+
+        context.store.requestAccessibilityPermission()
+
+        XCTAssertEqual(permissionCoordinator.requestedAccessibilityPrompts, [true])
+        XCTAssertTrue(permissionCoordinator.openedAccessibilitySettings)
+        XCTAssertEqual(context.store.accessibilityPermissionStatus, .denied)
+    }
+
     private func makeContext(
         mode: RecordingMode,
         permissionCoordinator: (any PermissionCoordinating)? = nil,
@@ -194,6 +316,24 @@ final class DictationStoreTests: XCTestCase {
 
         XCTFail("Timed out waiting for store state \(expectedState)", file: file, line: line)
     }
+
+    private func waitForMicrophonePermissionRequest(
+        _ permissionCoordinator: FakePermissionCoordinator,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if permissionCoordinator.requestMicrophonePermissionCallCount > 0 {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for microphone permission request", file: file, line: line)
+    }
+
 
     private static func makeRecordedAudio() throws -> RecordedAudio {
         let fileURL = FileManager.default.temporaryDirectory
@@ -277,13 +417,26 @@ private final class FakeTextInsertionService: TextInserting {
 
 @MainActor
 private final class FakePermissionCoordinator: PermissionCoordinating {
-    private let currentMicrophoneStatus: PermissionStatus
+    private var currentMicrophoneStatus: PermissionStatus
+    private var currentAccessibilityStatus: PermissionStatus
     private let requestedPermissionResult: Bool
+    private let accessibilityPromptResult: Bool
     private var permissionContinuation: CheckedContinuation<Bool, Never>?
+    private(set) var requestMicrophonePermissionCallCount = 0
+    private(set) var requestedAccessibilityPrompts: [Bool] = []
+    private(set) var openedMicrophoneSettings = false
+    private(set) var openedAccessibilitySettings = false
 
-    init(microphoneStatus: PermissionStatus, requestedPermissionResult: Bool = false) {
+    init(
+        microphoneStatus: PermissionStatus,
+        requestedPermissionResult: Bool = false,
+        accessibilityStatus: PermissionStatus = .granted,
+        accessibilityPromptResult: Bool = true
+    ) {
         self.currentMicrophoneStatus = microphoneStatus
         self.requestedPermissionResult = requestedPermissionResult
+        self.currentAccessibilityStatus = accessibilityStatus
+        self.accessibilityPromptResult = accessibilityPromptResult
     }
 
     func microphoneStatus() -> PermissionStatus {
@@ -291,23 +444,51 @@ private final class FakePermissionCoordinator: PermissionCoordinating {
     }
 
     func requestMicrophonePermission() async -> Bool {
-        await withCheckedContinuation { continuation in
+        requestMicrophonePermissionCallCount += 1
+        return await withCheckedContinuation { continuation in
             permissionContinuation = continuation
         }
+    }
+
+    func openMicrophoneSettings() {
+        openedMicrophoneSettings = true
+    }
+
+    func updateMicrophoneStatus(_ status: PermissionStatus) {
+        currentMicrophoneStatus = status
     }
 
     func finishRequest() async {
         permissionContinuation?.resume(returning: requestedPermissionResult)
         permissionContinuation = nil
+        if requestedPermissionResult {
+            currentMicrophoneStatus = .granted
+        } else {
+            currentMicrophoneStatus = .denied
+        }
         await Task.yield()
     }
 
     func accessibilityStatus() -> PermissionStatus {
-        .granted
+        currentAccessibilityStatus
+    }
+
+    func updateAccessibilityStatus(_ status: PermissionStatus) {
+        currentAccessibilityStatus = status
     }
 
     func requestAccessibilityPermission(prompt: Bool) -> Bool {
-        true
+        requestedAccessibilityPrompts.append(prompt)
+        if accessibilityPromptResult {
+            currentAccessibilityStatus = .granted
+            return true
+        }
+
+        return false
+    }
+
+    func openAccessibilitySettings() {
+        openedAccessibilitySettings = true
     }
 }
 

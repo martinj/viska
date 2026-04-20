@@ -53,7 +53,33 @@ struct MenuContentView: View {
             }
 
             // Settings sections
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                // Permission setup section
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Permissions")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    permissionRow(
+                        title: "Microphone",
+                        systemImage: "mic.fill",
+                        status: dictationStore.microphonePermissionStatus
+                    ) {
+                        Task {
+                            await dictationStore.requestMicrophonePermission()
+                        }
+                    }
+
+                    permissionRow(
+                        title: "Text insertion",
+                        systemImage: "text.cursor",
+                        status: dictationStore.accessibilityPermissionStatus
+                    ) {
+                        dictationStore.requestAccessibilityPermission()
+                    }
+                }
+
                 // Recording mode section
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Recording Mode")
@@ -110,7 +136,40 @@ struct MenuContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
-        .frame(width: 300, height: 320, alignment: .topLeading)
+        .frame(width: 300, height: 380, alignment: .topLeading)
+    }
+
+    private func permissionRow(
+        title: String,
+        systemImage: String,
+        status: PermissionStatus,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(permissionColor(for: status))
+                .frame(width: 18, height: 18)
+
+            Text(title)
+                .font(.system(size: 12))
+
+            Spacer()
+
+            Text(permissionLabel(for: status))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(permissionColor(for: status))
+
+            if let actionTitle = permissionActionTitle(for: status) {
+                PermissionActionButton(
+                    title: actionTitle,
+                    systemImage: permissionActionIcon(for: status),
+                    color: permissionColor(for: status),
+                    action: action
+                )
+            }
+        }
+        .frame(height: 24)
     }
 
     @ViewBuilder
@@ -170,5 +229,84 @@ struct MenuContentView: View {
         case .idle, .recording, .transcribing, .inserting:
             false
         }
+    }
+
+    private func permissionLabel(for status: PermissionStatus) -> String {
+        switch status {
+        case .granted:
+            "Allowed"
+        case .notDetermined:
+            "Needed"
+        case .denied:
+            "Needed"
+        case .restricted:
+            "Blocked"
+        }
+    }
+
+    private func permissionActionTitle(for status: PermissionStatus) -> String? {
+        switch status {
+        case .granted, .restricted:
+            nil
+        case .notDetermined:
+            "Allow"
+        case .denied:
+            "Open"
+        }
+    }
+
+    private func permissionActionIcon(for status: PermissionStatus) -> String {
+        switch status {
+        case .notDetermined:
+            "checkmark"
+        case .denied:
+            "arrow.up.forward.app"
+        case .granted, .restricted:
+            "checkmark"
+        }
+    }
+
+    private func permissionColor(for status: PermissionStatus) -> Color {
+        switch status {
+        case .granted:
+            .green
+        case .notDetermined, .denied:
+            .orange
+        case .restricted:
+            .red
+        }
+    }
+}
+
+private struct PermissionActionButton: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(color)
+                .frame(width: 62, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(color.opacity(isHovered ? 0.18 : 0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(color.opacity(isHovered ? 0.48 : 0.30), lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(title)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 }

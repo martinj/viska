@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import AVFoundation
 import Foundation
 
@@ -13,8 +14,10 @@ enum PermissionStatus: Equatable {
 protocol PermissionCoordinating: AnyObject {
     func microphoneStatus() -> PermissionStatus
     func requestMicrophonePermission() async -> Bool
+    func openMicrophoneSettings()
     func accessibilityStatus() -> PermissionStatus
     func requestAccessibilityPermission(prompt: Bool) -> Bool
+    func openAccessibilitySettings()
 }
 
 @MainActor
@@ -23,6 +26,7 @@ final class PermissionCoordinator: PermissionCoordinating {
     private let microphoneRequester: () async -> Bool
     private let accessibilityStatusProvider: () -> Bool
     private let accessibilityRequester: (Bool) -> Bool
+    private let privacySettingsOpener: (URL) -> Void
     private var hasPromptedForAccessibility = false
 
     init(
@@ -42,12 +46,16 @@ final class PermissionCoordinator: PermissionCoordinating {
         accessibilityRequester: @escaping (Bool) -> Bool = { prompt in
             let options = ["AXTrustedCheckOptionPrompt": prompt] as CFDictionary
             return AXIsProcessTrustedWithOptions(options)
+        },
+        privacySettingsOpener: @escaping (URL) -> Void = { url in
+            NSWorkspace.shared.open(url)
         }
     ) {
         self.microphoneStatusProvider = microphoneStatusProvider
         self.microphoneRequester = microphoneRequester
         self.accessibilityStatusProvider = accessibilityStatusProvider
         self.accessibilityRequester = accessibilityRequester
+        self.privacySettingsOpener = privacySettingsOpener
     }
 
     func microphoneStatus() -> PermissionStatus {
@@ -69,6 +77,10 @@ final class PermissionCoordinator: PermissionCoordinating {
         await microphoneRequester()
     }
 
+    func openMicrophoneSettings() {
+        openPrivacyPane("Privacy_Microphone")
+    }
+
     func accessibilityStatus() -> PermissionStatus {
         accessibilityStatusProvider() ? .granted : .denied
     }
@@ -85,5 +97,17 @@ final class PermissionCoordinator: PermissionCoordinating {
         }
 
         return accessibilityRequester(shouldPrompt)
+    }
+
+    func openAccessibilitySettings() {
+        openPrivacyPane("Privacy_Accessibility")
+    }
+
+    private func openPrivacyPane(_ pane: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else {
+            return
+        }
+
+        privacySettingsOpener(url)
     }
 }

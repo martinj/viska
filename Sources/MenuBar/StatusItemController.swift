@@ -12,10 +12,14 @@ final class StatusItemController: NSObject {
         super.init()
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     func install() {
         popover.behavior = .transient
         popover.animates = false
-        popover.contentSize = NSSize(width: 300, height: 320)
+        popover.contentSize = NSSize(width: 300, height: 380)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
                 settingsStore: dependencies.settingsStore,
@@ -31,12 +35,26 @@ final class StatusItemController: NSObject {
         button.action = #selector(togglePopover(_:))
         button.target = self
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidBecomeActive(_:)),
+            name: NSApplication.didBecomeActiveNotification,
+            object: NSApp
+        )
     }
 
     @objc
     nonisolated private func togglePopover(_ sender: NSStatusBarButton) {
         Task { @MainActor [weak self] in
             self?.togglePopoverOnMainActor()
+        }
+    }
+
+    @objc
+    nonisolated private func appDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.dependencies.dictationStore.refreshPermissionStatuses()
         }
     }
 
@@ -48,6 +66,7 @@ final class StatusItemController: NSObject {
             return
         }
 
+        dependencies.dictationStore.refreshPermissionStatuses()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
