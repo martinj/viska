@@ -4,6 +4,14 @@ A macOS menu bar app for global voice dictation. Press a hotkey anywhere, speak,
 
 Transcription is powered by ChatGPT via the [Codex CLI](https://github.com/openai/codex), which handles authentication.
 
+## Screenshots
+
+![Viska menu bar popover showing ready status, permissions, recording mode, and shortcut](docs/assets/viska-screen-1.png)
+
+![Viska recording overlay with live waveform](docs/assets/viska-screen-2.png)
+
+![Viska transcribing overlay](docs/assets/viska-screen-3.png)
+
 ## Features
 
 - **Global hotkey** — trigger dictation from any app (default: `⌃⌥Space`)
