@@ -11,6 +11,7 @@ final class AppDependencies {
     let codexClient: CodexAppServerClient
     let codexStatusMonitor: CodexAuthStatusMonitor
     let transcriptionClient: TranscriptionClient
+    let transcriptionHistoryStore: TranscriptionHistoryStore
     let focusedElementResolver: FocusedElementResolver
     let clipboardService: ClipboardService
     let syntheticPasteService: SyntheticPasteService
@@ -34,6 +35,7 @@ final class AppDependencies {
         self.codexClient = CodexAppServerClient(processManager: codexProcessManager)
         self.codexStatusMonitor = CodexAuthStatusMonitor(client: codexClient)
         self.transcriptionClient = TranscriptionClient(authProvider: codexClient)
+        self.transcriptionHistoryStore = TranscriptionHistoryStore()
         self.focusedElementResolver = FocusedElementResolver()
         self.clipboardService = ClipboardService()
         self.syntheticPasteService = SyntheticPasteService()
@@ -46,12 +48,14 @@ final class AppDependencies {
         self.dictationStore = DictationStore(
             settingsStore: settingsStore,
             hotkeyService: hotkeyService,
+            transcriptionHistoryStore: transcriptionHistoryStore,
             permissionCoordinator: permissionCoordinator,
             audioCaptureEngine: audioCaptureEngine,
             overlayController: recordingOverlayController,
             codexStatusMonitor: codexStatusMonitor,
             transcriptionClient: transcriptionClient,
             textInsertionService: textInsertionService,
+            clipboardService: clipboardService,
             initialState: .unavailable(
                 title: "Checking Codex",
                 message: "Checking Codex app-server status…"

@@ -2,8 +2,14 @@ import AppKit
 import SwiftUI
 
 struct MenuContentView: View {
+    static let contentWidth: CGFloat = 320
+
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var dictationStore: DictationStore
+
+    static func contentSize(forHistoryCount historyCount: Int) -> NSSize {
+        NSSize(width: contentWidth, height: contentHeight(forHistoryCount: historyCount))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -107,6 +113,28 @@ struct MenuContentView: View {
                         dictationStore.updateHotkey(descriptor)
                     }
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recent")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    if dictationStore.transcriptionHistory.isEmpty {
+                        Text("No transcriptions yet")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                            .frame(height: 28, alignment: .center)
+                    } else {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(dictationStore.transcriptionHistory) { item in
+                                TranscriptionHistoryRow(item: item) {
+                                    dictationStore.copyTranscript(id: item.id)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
@@ -136,7 +164,28 @@ struct MenuContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
-        .frame(width: 300, height: 380, alignment: .topLeading)
+        .frame(
+            width: Self.contentWidth,
+            height: Self.contentHeight(forHistoryCount: dictationStore.transcriptionHistory.count),
+            alignment: .topLeading
+        )
+    }
+
+    private static func contentHeight(forHistoryCount historyCount: Int) -> CGFloat {
+        let clampedCount = min(max(historyCount, 0), 10)
+        guard clampedCount > 0 else { return 390 }
+
+        let baseHeight: CGFloat = 326
+        let recentLabelHeight: CGFloat = 14
+        let recentSpacing: CGFloat = 6
+        let rowHeight: CGFloat = 46
+        let rowSpacing: CGFloat = 2
+        let historyHeight = recentLabelHeight
+            + recentSpacing
+            + (CGFloat(clampedCount) * rowHeight)
+            + (CGFloat(max(clampedCount - 1, 0)) * rowSpacing)
+
+        return baseHeight + historyHeight
     }
 
     private func permissionRow(
@@ -274,6 +323,68 @@ struct MenuContentView: View {
             .orange
         case .restricted:
             .red
+        }
+    }
+}
+
+private struct TranscriptionHistoryRow: View {
+    let item: TranscriptionHistoryItem
+    let copy: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(relativeTimestamp(for: item.createdAt))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
+
+                Text(item.text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: copy) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Copy transcript")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        )
+        .frame(height: 46)
+        .onHover { isHovered = $0 }
+    }
+
+    private func relativeTimestamp(for date: Date) -> String {
+        let elapsedSeconds = max(0, Int(Date().timeIntervalSince(date)))
+
+        switch elapsedSeconds {
+        case ..<60:
+            return "just now"
+        case ..<3_600:
+            let minutes = elapsedSeconds / 60
+            return "\(minutes)m ago"
+        case ..<86_400:
+            let hours = elapsedSeconds / 3_600
+            return "\(hours)h ago"
+        default:
+            let days = elapsedSeconds / 86_400
+            return "\(days)d ago"
         }
     }
 }

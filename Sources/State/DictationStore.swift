@@ -16,15 +16,18 @@ final class DictationStore: ObservableObject {
     @Published private(set) var lastTranscript: String?
     @Published private(set) var microphonePermissionStatus: PermissionStatus = .granted
     @Published private(set) var accessibilityPermissionStatus: PermissionStatus = .granted
+    @Published private(set) var transcriptionHistory: [TranscriptionHistoryItem]
 
     private let settingsStore: SettingsStore
     private let hotkeyService: any GlobalHotkeyControlling
+    private let transcriptionHistoryStore: any TranscriptionHistoryStoring
     private let permissionCoordinator: (any PermissionCoordinating)?
     private let audioCaptureEngine: (any AudioCaptureControlling)?
     private let overlayController: (any RecordingOverlayControlling)?
     private let codexStatusMonitor: CodexAuthStatusMonitor?
     private let transcriptionClient: (any AudioTranscribing)?
     private let textInsertionService: (any TextInserting)?
+    private let clipboardService: (any ClipboardControlling)?
     private weak var lifecycle: DictationLifecycleControlling?
     private var preferencesCancellable: AnyCancellable?
     private var pendingStartTask: Task<Void, Never>?
@@ -33,25 +36,30 @@ final class DictationStore: ObservableObject {
     init(
         settingsStore: SettingsStore,
         hotkeyService: any GlobalHotkeyControlling,
+        transcriptionHistoryStore: any TranscriptionHistoryStoring = TranscriptionHistoryStore(),
         permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
         overlayController: (any RecordingOverlayControlling)? = nil,
         codexStatusMonitor: CodexAuthStatusMonitor? = nil,
         transcriptionClient: (any AudioTranscribing)? = nil,
         textInsertionService: (any TextInserting)? = nil,
+        clipboardService: (any ClipboardControlling)? = nil,
         lifecycle: DictationLifecycleControlling? = nil,
         initialState: DictationState = .unavailable(title: "Checking Codex", message: "Codex setup is not ready yet.")
     ) {
         self.settingsStore = settingsStore
         self.hotkeyService = hotkeyService
+        self.transcriptionHistoryStore = transcriptionHistoryStore
         self.permissionCoordinator = permissionCoordinator
         self.audioCaptureEngine = audioCaptureEngine
         self.overlayController = overlayController
         self.codexStatusMonitor = codexStatusMonitor
         self.transcriptionClient = transcriptionClient
         self.textInsertionService = textInsertionService
+        self.clipboardService = clipboardService
         self.lifecycle = lifecycle
         self.state = initialState
+        self.transcriptionHistory = transcriptionHistoryStore.load()
 
         hotkeyService.onEvent = { [weak self] event in
             self?.handleHotkeyEvent(event)
@@ -90,6 +98,11 @@ final class DictationStore: ObservableObject {
 
     func finishActiveWork() {
         state = .idle
+    }
+
+    func copyTranscript(id: TranscriptionHistoryItem.ID) {
+        guard let item = transcriptionHistory.first(where: { $0.id == id }) else { return }
+        clipboardService?.setString(item.text)
     }
 
     func refreshPermissionStatuses() {
@@ -269,6 +282,7 @@ final class DictationStore: ObservableObject {
             let result = try await client.transcribe(audio: audio)
             overlayController?.hide()
             lastTranscript = result.text
+            appendHistoryItemIfNeeded(result.text)
             if let textInsertionService {
                 state = .inserting
                 let insertionOutcome = await textInsertionService.insert(result.text)
@@ -317,6 +331,18 @@ final class DictationStore: ObservableObject {
                 message: "Transcription failed: \(error.localizedDescription)"
             )
         }
+    }
+
+    private func appendHistoryItemIfNeeded(_ text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+
+        transcriptionHistory.insert(
+            TranscriptionHistoryItem(id: UUID(), text: text, createdAt: Date()),
+            at: 0
+        )
+        transcriptionHistory = Array(transcriptionHistory.prefix(10))
+        transcriptionHistoryStore.save(transcriptionHistory)
     }
 
     private func beginRecording() async {

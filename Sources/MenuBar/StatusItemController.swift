@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -6,6 +7,7 @@ final class StatusItemController: NSObject {
     private let dependencies: AppDependencies
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
+    private var transcriptionHistoryCancellable: AnyCancellable?
 
     init(dependencies: AppDependencies) {
         self.dependencies = dependencies
@@ -19,13 +21,17 @@ final class StatusItemController: NSObject {
     func install() {
         popover.behavior = .transient
         popover.animates = false
-        popover.contentSize = NSSize(width: 300, height: 380)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
                 settingsStore: dependencies.settingsStore,
                 dictationStore: dependencies.dictationStore
             )
         )
+        updatePopoverContentSize()
+        transcriptionHistoryCancellable = dependencies.dictationStore.$transcriptionHistory
+            .sink { [weak self] history in
+                self?.updatePopoverContentSize(forHistoryCount: history.count)
+            }
 
         guard let button = statusItem.button else { return }
         button.image = NSImage(
@@ -67,7 +73,16 @@ final class StatusItemController: NSObject {
         }
 
         dependencies.dictationStore.refreshPermissionStatuses()
+        updatePopoverContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func updatePopoverContentSize() {
+        updatePopoverContentSize(forHistoryCount: dependencies.dictationStore.transcriptionHistory.count)
+    }
+
+    private func updatePopoverContentSize(forHistoryCount historyCount: Int) {
+        popover.contentSize = MenuContentView.contentSize(forHistoryCount: historyCount)
     }
 }

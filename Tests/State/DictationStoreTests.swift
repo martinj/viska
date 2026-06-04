@@ -63,11 +63,73 @@ final class DictationStoreTests: XCTestCase {
         await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.lastTranscript, "hello world")
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["hello world"])
         XCTAssertEqual(context.store.state, .idle)
 
         context.store.handleHotkeyEvent(.pressed)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
+    func testTranscriptionHistoryPersistsLatestTenNewestFirst() async throws {
+        let historyStore = FakeTranscriptionHistoryStore()
+        let context = try makeContext(
+            mode: .holdToRecord,
+            transcriptionHistoryStore: historyStore,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(
+                results: (1...11).map { TranscriptionResult(text: "transcript \($0)") }
+            )
+        )
+
+        context.store.setReady()
+        for _ in 1...11 {
+            context.store.handleHotkeyEvent(.pressed)
+            context.store.handleHotkeyEvent(.released)
+            await waitForIdle(store: context.store)
+        }
+
+        XCTAssertEqual(
+            context.store.transcriptionHistory.map(\.text),
+            (2...11).reversed().map { "transcript \($0)" }
+        )
+        XCTAssertEqual(historyStore.savedItems.map(\.text), context.store.transcriptionHistory.map(\.text))
+    }
+
+    func testTranscriptionHistorySkipsWhitespaceOnlyTranscripts() async throws {
+        let historyStore = FakeTranscriptionHistoryStore()
+        let context = try makeContext(
+            mode: .holdToRecord,
+            transcriptionHistoryStore: historyStore,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: " \n\t "))
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(context.store.lastTranscript, " \n\t ")
+        XCTAssertEqual(context.store.transcriptionHistory, [])
+        XCTAssertEqual(historyStore.savedItems, [])
+    }
+
+    func testTranscriptionHistoryLoadsPersistedItemsAndCopiesTranscriptText() {
+        let item = TranscriptionHistoryItem(id: UUID(), text: "saved transcript", createdAt: Date())
+        let clipboard = FakeClipboardService()
+        let context = makeContext(
+            mode: .holdToRecord,
+            transcriptionHistoryStore: FakeTranscriptionHistoryStore(loadedItems: [item]),
+            clipboardService: clipboard
+        )
+
+        XCTAssertEqual(context.store.transcriptionHistory, [item])
+
+        context.store.copyTranscript(id: item.id)
+
+        XCTAssertEqual(clipboard.value, "saved transcript")
     }
 
     func testTranscriptionRequestFailureAllowsAnotherRecording() async throws {
@@ -262,10 +324,12 @@ final class DictationStoreTests: XCTestCase {
 
     private func makeContext(
         mode: RecordingMode,
+        transcriptionHistoryStore: any TranscriptionHistoryStoring = FakeTranscriptionHistoryStore(),
         permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
         transcriptionClient: (any AudioTranscribing)? = nil,
-        textInsertionService: (any TextInserting)? = nil
+        textInsertionService: (any TextInserting)? = nil,
+        clipboardService: (any ClipboardControlling)? = nil
     ) -> StoreContext {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let settingsStore = SettingsStore(userDefaults: defaults)
@@ -276,10 +340,12 @@ final class DictationStoreTests: XCTestCase {
         let store = DictationStore(
             settingsStore: settingsStore,
             hotkeyService: hotkeyService,
+            transcriptionHistoryStore: transcriptionHistoryStore,
             permissionCoordinator: permissionCoordinator,
             audioCaptureEngine: audioCaptureEngine,
             transcriptionClient: transcriptionClient,
             textInsertionService: textInsertionService,
+            clipboardService: clipboardService,
             lifecycle: lifecycle,
             initialState: .unavailable(title: "Setup required", message: "Setup required")
         )
@@ -387,18 +453,56 @@ private final class FakeAudioCaptureEngine: AudioCaptureControlling {
 }
 
 private final class FakeTranscriptionClient: AudioTranscribing, @unchecked Sendable {
-    private let result: Result<TranscriptionResult, Swift.Error>
+    private var results: [Result<TranscriptionResult, Swift.Error>]
 
     init(result: TranscriptionResult) {
-        self.result = .success(result)
+        self.results = [.success(result)]
+    }
+
+    init(results: [TranscriptionResult]) {
+        self.results = results.map { .success($0) }
     }
 
     init(error: Swift.Error) {
-        self.result = .failure(error)
+        self.results = [.failure(error)]
     }
 
     func transcribe(audio: RecordedAudio) async throws -> TranscriptionResult {
-        try result.get()
+        if results.count > 1 {
+            return try results.removeFirst().get()
+        }
+
+        return try results[0].get()
+    }
+}
+
+private final class FakeTranscriptionHistoryStore: TranscriptionHistoryStoring {
+    private let loadedItems: [TranscriptionHistoryItem]
+    private(set) var savedItems: [TranscriptionHistoryItem] = []
+
+    init(loadedItems: [TranscriptionHistoryItem] = []) {
+        self.loadedItems = loadedItems
+    }
+
+    func load() -> [TranscriptionHistoryItem] {
+        loadedItems
+    }
+
+    func save(_ items: [TranscriptionHistoryItem]) {
+        savedItems = items
+    }
+}
+
+@MainActor
+private final class FakeClipboardService: ClipboardControlling {
+    private(set) var value: String?
+
+    func stringContents() -> String? {
+        value
+    }
+
+    func setString(_ string: String) {
+        value = string
     }
 }
 
