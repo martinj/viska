@@ -6,6 +6,7 @@ struct MenuContentView: View {
 
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var dictationStore: DictationStore
+    let openWordReplacements: () -> Void
 
     static func contentSize(forHistoryCount historyCount: Int) -> NSSize {
         NSSize(width: contentWidth, height: contentHeight(forHistoryCount: historyCount))
@@ -114,6 +115,19 @@ struct MenuContentView: View {
                     }
                 }
 
+                // Word replacements section
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Word Replacements")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    WordReplacementsMenuRow(
+                        label: ruleCountLabel,
+                        action: openWordReplacements
+                    )
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Recent")
                         .font(.system(size: 11, weight: .medium))
@@ -171,11 +185,28 @@ struct MenuContentView: View {
         )
     }
 
+    private var ruleCountLabel: String {
+        let count = settingsStore.preferences.wordReplacements
+            .filter { !$0.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .count
+
+        switch count {
+        case 0:
+            return "No rules yet"
+        case 1:
+            return "1 rule"
+        default:
+            return "\(count) rules"
+        }
+    }
+
     private static func contentHeight(forHistoryCount historyCount: Int) -> CGFloat {
         let clampedCount = min(max(historyCount, 0), 10)
-        guard clampedCount > 0 else { return 390 }
+        // +58 for the Word Replacements section: 14 outer spacing + 14 label
+        // + 6 inner spacing + 24 row. Keep the empty-state constant in sync.
+        guard clampedCount > 0 else { return 448 }
 
-        let baseHeight: CGFloat = 326
+        let baseHeight: CGFloat = 384
         let recentLabelHeight: CGFloat = 14
         let recentSpacing: CGFloat = 6
         let rowHeight: CGFloat = 46
@@ -386,6 +417,45 @@ private struct TranscriptionHistoryRow: View {
             let days = elapsedSeconds / 86_400
             return "\(days)d ago"
         }
+    }
+}
+
+private struct WordReplacementsMenuRow: View {
+    let label: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+
+                Text(label)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                Text("Edit…")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help("Edit word replacements")
+        .onHover { isHovered = $0 }
     }
 }
 

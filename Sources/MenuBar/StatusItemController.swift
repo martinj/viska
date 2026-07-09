@@ -8,6 +8,7 @@ final class StatusItemController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private var transcriptionHistoryCancellable: AnyCancellable?
+    private var wordReplacementsWindowController: WordReplacementsWindowController?
 
     init(dependencies: AppDependencies) {
         self.dependencies = dependencies
@@ -24,7 +25,10 @@ final class StatusItemController: NSObject {
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
                 settingsStore: dependencies.settingsStore,
-                dictationStore: dependencies.dictationStore
+                dictationStore: dependencies.dictationStore,
+                openWordReplacements: { [weak self] in
+                    self?.openWordReplacements()
+                }
             )
         )
         updatePopoverContentSize()
@@ -76,6 +80,24 @@ final class StatusItemController: NSObject {
         updatePopoverContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func openWordReplacements() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+
+        let controller: WordReplacementsWindowController
+        if let existing = wordReplacementsWindowController {
+            controller = existing
+        } else {
+            controller = WordReplacementsWindowController(
+                settingsStore: dependencies.settingsStore
+            )
+            wordReplacementsWindowController = controller
+        }
+
+        controller.present()
     }
 
     private func updatePopoverContentSize() {

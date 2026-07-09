@@ -31,6 +31,14 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
+    func updateWordReplacements(_ wordReplacements: [WordReplacement]) {
+        let sanitizedWordReplacements = Self.sanitize(wordReplacements)
+        guard preferences.wordReplacements != sanitizedWordReplacements else { return }
+
+        preferences.wordReplacements = sanitizedWordReplacements
+        persist()
+    }
+
     func updatePreferences(_ preferences: AppPreferences) {
         self.preferences = preferences
         persist()
@@ -39,5 +47,18 @@ final class SettingsStore: ObservableObject {
     private func persist() {
         guard let data = try? encoder.encode(preferences) else { return }
         userDefaults.set(data, forKey: key)
+    }
+
+    private static func sanitize(_ wordReplacements: [WordReplacement]) -> [WordReplacement] {
+        wordReplacements.compactMap { rule in
+            let trigger = rule.trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trigger.isEmpty else { return nil }
+
+            return WordReplacement(
+                id: rule.id,
+                trigger: trigger,
+                replacement: rule.replacement
+            )
+        }
     }
 }
