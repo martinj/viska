@@ -48,6 +48,31 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.state, .inserting)
     }
 
+    func testWordReplacementChangesDoNotReconfigureHotkey() {
+        let context = makeContext(mode: .holdToRecord)
+
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 1)
+
+        context.settingsStore.updateWordReplacements([
+            WordReplacement(id: UUID(), trigger: "paper trail", replacement: "papertrail"),
+        ])
+
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 1)
+
+        context.settingsStore.updateHotkey(
+            HotkeyDescriptor(
+                keyCode: UInt32(36),
+                modifiers: HotkeyDescriptor.requiredModifierFlags
+            )
+        )
+
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 2)
+
+        context.settingsStore.updateRecordingMode(.toggleToRecord)
+
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 3)
+    }
+
     func testClipboardFallbackReturnsToIdleAndAllowsAnotherRecording() async throws {
         let context = try makeContext(
             mode: .holdToRecord,
@@ -114,6 +139,32 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.lastTranscript, " \n\t ")
         XCTAssertEqual(context.store.transcriptionHistory, [])
         XCTAssertEqual(historyStore.savedItems, [])
+    }
+
+    func testTranscriptionAppliesWordReplacementsBeforeInsertionAndHistory() async throws {
+        let historyStore = FakeTranscriptionHistoryStore()
+        let textInsertionService = FakeTextInsertionService(outcome: .insertedDirectly)
+        let context = try makeContext(
+            mode: .holdToRecord,
+            wordReplacements: [
+                WordReplacement(id: UUID(), trigger: "paper trail", replacement: "papertrail"),
+            ],
+            transcriptionHistoryStore: historyStore,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Paper Trail, please")),
+            textInsertionService: textInsertionService
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.released)
+
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(context.store.lastTranscript, "papertrail, please")
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["papertrail, please"])
+        XCTAssertEqual(historyStore.savedItems.map(\.text), ["papertrail, please"])
+        XCTAssertEqual(textInsertionService.insertedTexts, ["papertrail, please"])
     }
 
     func testTranscriptionHistoryLoadsPersistedItemsAndCopiesTranscriptText() {
@@ -324,6 +375,7 @@ final class DictationStoreTests: XCTestCase {
 
     private func makeContext(
         mode: RecordingMode,
+        wordReplacements: [WordReplacement] = [],
         transcriptionHistoryStore: any TranscriptionHistoryStoring = FakeTranscriptionHistoryStore(),
         permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
@@ -334,6 +386,7 @@ final class DictationStoreTests: XCTestCase {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let settingsStore = SettingsStore(userDefaults: defaults)
         settingsStore.updateRecordingMode(mode)
+        settingsStore.updateWordReplacements(wordReplacements)
 
         let hotkeyService = FakeGlobalHotkeyService()
         let lifecycle = DictationLifecycleSpy()
@@ -352,6 +405,7 @@ final class DictationStoreTests: XCTestCase {
 
         return StoreContext(
             store: store,
+            settingsStore: settingsStore,
             hotkeyService: hotkeyService,
             lifecycle: lifecycle
         )
@@ -412,6 +466,7 @@ final class DictationStoreTests: XCTestCase {
 
 private struct StoreContext {
     let store: DictationStore
+    let settingsStore: SettingsStore
     let hotkeyService: FakeGlobalHotkeyService
     let lifecycle: DictationLifecycleSpy
 }
@@ -509,13 +564,15 @@ private final class FakeClipboardService: ClipboardControlling {
 @MainActor
 private final class FakeTextInsertionService: TextInserting {
     private let outcome: TextInsertionOutcome
+    private(set) var insertedTexts: [String] = []
 
     init(outcome: TextInsertionOutcome) {
         self.outcome = outcome
     }
 
     func insert(_ text: String) async -> TextInsertionOutcome {
-        outcome
+        insertedTexts.append(text)
+        return outcome
     }
 }
 
@@ -601,8 +658,10 @@ private final class FakeGlobalHotkeyService: GlobalHotkeyControlling {
     var onEvent: ((GlobalHotkeyService.Event) -> Void)?
     private(set) var configuredDescriptor: HotkeyDescriptor?
     private(set) var configuredMode: RecordingMode?
+    private(set) var configureCallCount = 0
 
     func configure(descriptor: HotkeyDescriptor, mode: RecordingMode) throws {
+        configureCallCount += 1
         configuredDescriptor = descriptor
         configuredMode = mode
     }

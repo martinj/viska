@@ -280,12 +280,16 @@ final class DictationStore: ObservableObject {
     private func transcribe(audio: RecordedAudio, client: any AudioTranscribing) async {
         do {
             let result = try await client.transcribe(audio: audio)
+            let processedText = TranscriptReplacementEngine.apply(
+                settingsStore.preferences.wordReplacements,
+                to: result.text
+            )
             overlayController?.hide()
-            lastTranscript = result.text
-            appendHistoryItemIfNeeded(result.text)
+            lastTranscript = processedText
+            appendHistoryItemIfNeeded(processedText)
             if let textInsertionService {
                 state = .inserting
-                let insertionOutcome = await textInsertionService.insert(result.text)
+                let insertionOutcome = await textInsertionService.insert(processedText)
                 switch insertionOutcome {
                 case .insertedDirectly, .insertedViaPaste:
                     break
@@ -420,17 +424,26 @@ final class DictationStore: ObservableObject {
 
     private func observePreferences() {
         preferencesCancellable = settingsStore.$preferences
+            .map(HotkeyConfiguration.init(preferences:))
+            .removeDuplicates()
             .dropFirst()
-            .sink { [weak self] preferences in
-                self?.configureHotkey(using: preferences)
+            .sink { [weak self] configuration in
+                self?.configureHotkey(
+                    descriptor: configuration.hotkey,
+                    mode: configuration.recordingMode
+                )
             }
     }
 
     private func configureHotkey(using preferences: AppPreferences) {
+        configureHotkey(descriptor: preferences.hotkey, mode: preferences.recordingMode)
+    }
+
+    private func configureHotkey(descriptor: HotkeyDescriptor, mode: RecordingMode) {
         do {
             try hotkeyService.configure(
-                descriptor: preferences.hotkey,
-                mode: preferences.recordingMode
+                descriptor: descriptor,
+                mode: mode
             )
             hotkeyErrorMessage = nil
         } catch {
@@ -455,5 +468,15 @@ final class DictationStore: ObservableObject {
         }
 
         return "Unable to update the global shortcut."
+    }
+}
+
+private struct HotkeyConfiguration: Equatable {
+    let hotkey: HotkeyDescriptor
+    let recordingMode: RecordingMode
+
+    init(preferences: AppPreferences) {
+        self.hotkey = preferences.hotkey
+        self.recordingMode = preferences.recordingMode
     }
 }
