@@ -1,7 +1,8 @@
 import AVFoundation
 import Foundation
+import OSLog
 
-struct RecordedAudio: Equatable {
+struct RecordedAudio: Equatable, Sendable {
     let fileURL: URL
     let sampleRate: Int
     let sampleCount: Int
@@ -9,209 +10,169 @@ struct RecordedAudio: Equatable {
 
 @MainActor
 protocol AudioCaptureControlling: AnyObject {
-    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws
-    func stopCapture() throws -> RecordedAudio
-    func cancelCapture()
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) async throws
+    func stopCapture() async throws -> RecordedAudio
+    func cancelCapture() async
 }
 
 @MainActor
 final class AudioCaptureEngine: AudioCaptureControlling {
-    enum Error: Swift.Error {
+    enum Error: Swift.Error, Sendable {
         case alreadyCapturing
         case inputUnavailable
-        case unsupportedFormat
         case nothingCaptured
     }
 
-    private let wavEncoder = WAVEncoder()
-    private let fileManager: FileManager
-    private let engineFactory: () -> AVAudioEngine
+    nonisolated static let sampleRate = 16_000
 
-    private var engine: AVAudioEngine?
-    private var currentSampleRate = 16_000
-    private var captureSession: CaptureSession?
-    private var isCapturing = false
+    private let worker: AudioRecorderWorker
 
-    init(
-        fileManager: FileManager = .default,
-        engineFactory: @escaping () -> AVAudioEngine = AVAudioEngine.init
-    ) {
-        self.fileManager = fileManager
-        self.engineFactory = engineFactory
+    init() {
+        self.worker = AudioRecorderWorker()
     }
 
-    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
-        guard !isCapturing else { throw Error.alreadyCapturing }
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) async throws {
+        let levelRelay = MainQueueLevelRelay(levelHandler: levelHandler)
 
-        let engine = engineFactory()
-        let inputNode = engine.inputNode
-        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
-        let nodeOutputFormat = inputNode.outputFormat(forBus: 0)
-
-        guard hardwareInputFormat.channelCount > 0 else {
-            throw Error.inputUnavailable
+        try await withTaskCancellationHandler {
+            try await worker.start(levelRelay: levelRelay)
+            try Task.checkCancellation()
+        } onCancel: { [worker] in
+            Task {
+                await worker.cancel()
+            }
         }
+    }
 
-        let tapFormat = Self.captureFormat(
-            hardwareInputFormat: hardwareInputFormat,
-            nodeOutputFormat: nodeOutputFormat
-        )
-        currentSampleRate = Int(tapFormat.sampleRate.rounded())
-        let captureSession = CaptureSession(levelRelay: MainQueueLevelRelay(levelHandler: levelHandler))
-        self.engine = engine
-        self.captureSession = captureSession
+    func stopCapture() async throws -> RecordedAudio {
+        try await worker.stop()
+    }
+
+    func cancelCapture() async {
+        await worker.cancel()
+    }
+
+    nonisolated static func recordingSettings() -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+    }
+
+    nonisolated static func normalizedMeterLevel(decibels: Float) -> Float {
+        guard decibels > -60 else { return 0 }
+
+        let amplitude = pow(10, decibels / 20)
+        return min(sqrt(amplitude * 4), 1)
+    }
+}
+
+private actor AudioRecorderWorker {
+    private let logger = Logger(subsystem: "com.martinjonsson.Viska", category: "AudioCapture")
+
+    private var recorder: AVAudioRecorder?
+    private var meterTask: Task<Void, Never>?
+    private var outputURL: URL?
+    private var meterHistory = [Float](repeating: 0, count: AudioLevelAnalyzer.bandCount)
+
+    func start(levelRelay: MainQueueLevelRelay) throws {
+        guard recorder == nil else { throw AudioCaptureEngine.Error.alreadyCapturing }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("viska-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
 
         do {
-            inputNode.removeTap(onBus: 0)
-            inputNode.installTap(
-                onBus: 0,
-                bufferSize: 1_024,
-                format: tapFormat,
-                block: Self.makeTapBlock(captureSession: captureSession)
+            let recorder = try AVAudioRecorder(
+                url: outputURL,
+                settings: AudioCaptureEngine.recordingSettings()
             )
+            recorder.isMeteringEnabled = true
 
-            engine.prepare()
-            try engine.start()
-            isCapturing = true
+            guard recorder.prepareToRecord(), recorder.record() else {
+                recorder.deleteRecording()
+                throw AudioCaptureEngine.Error.inputUnavailable
+            }
+
+            self.recorder = recorder
+            self.outputURL = outputURL
+            meterHistory = [Float](repeating: 0, count: AudioLevelAnalyzer.bandCount)
+            startMetering(levelRelay: levelRelay)
+            logger.info("Microphone capture started with input-only recorder")
         } catch {
-            inputNode.removeTap(onBus: 0)
-            engine.stop()
-            engine.reset()
-            self.engine = nil
-            self.captureSession = nil
+            logger.error("Microphone capture failed to start: \(error.localizedDescription, privacy: .public)")
+            self.recorder = nil
+            self.outputURL = nil
             throw error
         }
     }
 
-    func stopCapture() throws -> RecordedAudio {
-        guard isCapturing, let engine else { throw Error.nothingCaptured }
-
-        let inputNode = engine.inputNode
-        inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-        isCapturing = false
-
-        guard let captureSession else {
-            throw Error.nothingCaptured
+    func stop() throws -> RecordedAudio {
+        guard let recorder, let outputURL else {
+            throw AudioCaptureEngine.Error.nothingCaptured
         }
 
-        self.engine = nil
-        self.captureSession = nil
+        stopMetering()
+        let duration = recorder.currentTime
+        recorder.stop()
+        self.recorder = nil
+        self.outputURL = nil
 
-        let samples = captureSession.snapshot()
-        guard !samples.isEmpty else {
-            throw Error.nothingCaptured
+        let sampleCount = Int(duration * Double(AudioCaptureEngine.sampleRate))
+        guard sampleCount > 0,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: outputURL.path),
+              let fileSize = attributes[.size] as? NSNumber,
+              fileSize.intValue > 44 else {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw AudioCaptureEngine.Error.nothingCaptured
         }
-
-        let wavData = wavEncoder.encodePCM16(samples: samples, sampleRate: currentSampleRate)
-        let outputURL = fileManager.temporaryDirectory
-            .appendingPathComponent("viska-\(UUID().uuidString)")
-            .appendingPathExtension("wav")
-
-        try wavData.write(to: outputURL, options: .atomic)
 
         return RecordedAudio(
             fileURL: outputURL,
-            sampleRate: currentSampleRate,
-            sampleCount: samples.count
+            sampleRate: AudioCaptureEngine.sampleRate,
+            sampleCount: sampleCount
         )
     }
 
-    func cancelCapture() {
-        guard let engine else {
-            isCapturing = false
-            captureSession?.clear()
-            captureSession = nil
-            return
-        }
-
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-        self.engine = nil
-        isCapturing = false
-        captureSession?.clear()
-        captureSession = nil
+    func cancel() {
+        stopMetering()
+        recorder?.stop()
+        recorder?.deleteRecording()
+        recorder = nil
+        outputURL = nil
+        meterHistory = [Float](repeating: 0, count: AudioLevelAnalyzer.bandCount)
     }
 
-    nonisolated static func captureFormat(
-        hardwareInputFormat: AVAudioFormat,
-        nodeOutputFormat: AVAudioFormat
-    ) -> AVAudioFormat {
-        let hasMatchingSampleRate = hardwareInputFormat.sampleRate == nodeOutputFormat.sampleRate
-        let hasMatchingChannelCount = hardwareInputFormat.channelCount == nodeOutputFormat.channelCount
-
-        guard hasMatchingSampleRate, hasMatchingChannelCount else {
-            return hardwareInputFormat
-        }
-
-        return nodeOutputFormat
-    }
-
-    nonisolated private static func makeTapBlock(captureSession: CaptureSession) -> AVAudioNodeTapBlock {
-        { buffer, _ in
-            let convertedSamples = convertToPCM16Mono(buffer: buffer)
-            let bands = AudioLevelAnalyzer.waveformBands(for: buffer)
-
-            captureSession.append(contentsOf: convertedSamples)
-            captureSession.dispatchLevels(bands)
-        }
-    }
-
-    nonisolated private static func convertToPCM16Mono(buffer: AVAudioPCMBuffer) -> [Int16] {
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return [] }
-
-        if let floatData = buffer.floatChannelData {
-            let channelCount = Int(buffer.format.channelCount)
-            return (0..<frameCount).map { frameIndex in
-                let average = (0..<channelCount).reduce(Float.zero) { partialResult, channelIndex in
-                    partialResult + floatData[channelIndex][frameIndex]
-                } / Float(channelCount)
-
-                let clipped = min(max(average, -1), 1)
-                return Int16(clipped * Float(Int16.max))
+    private func startMetering(levelRelay: MainQueueLevelRelay) {
+        meterTask?.cancel()
+        meterTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(30))
+                guard !Task.isCancelled else { return }
+                await self?.publishMeterLevel(to: levelRelay)
             }
         }
-
-        if let int16Data = buffer.int16ChannelData {
-            let channelCount = Int(buffer.format.channelCount)
-            return (0..<frameCount).map { frameIndex in
-                let total = (0..<channelCount).reduce(Int32.zero) { partialResult, channelIndex in
-                    partialResult + Int32(int16Data[channelIndex][frameIndex])
-                }
-
-                return Int16(total / Int32(channelCount))
-            }
-        }
-
-        return []
-    }
-}
-
-private final class CaptureSession: @unchecked Sendable {
-    private let sampleAccumulator = SampleAccumulator()
-    private let levelRelay: MainQueueLevelRelay
-
-    init(levelRelay: MainQueueLevelRelay) {
-        self.levelRelay = levelRelay
     }
 
-    func append(contentsOf samples: [Int16]) {
-        sampleAccumulator.append(contentsOf: samples)
+    private func stopMetering() {
+        meterTask?.cancel()
+        meterTask = nil
     }
 
-    func snapshot() -> [Int16] {
-        sampleAccumulator.snapshot()
-    }
+    private func publishMeterLevel(to levelRelay: MainQueueLevelRelay) {
+        guard let recorder else { return }
 
-    func clear() {
-        sampleAccumulator.clear()
-    }
-
-    func dispatchLevels(_ levels: [Float]) {
-        levelRelay.dispatch(levels)
+        recorder.updateMeters()
+        let level = AudioCaptureEngine.normalizedMeterLevel(
+            decibels: recorder.averagePower(forChannel: 0)
+        )
+        meterHistory.removeFirst()
+        meterHistory.append(level)
+        levelRelay.dispatch(meterHistory)
     }
 }
 
@@ -226,27 +187,6 @@ private final class MainQueueLevelRelay: @unchecked Sendable {
     func dispatch(_ levels: [Float]) {
         DispatchQueue.main.async {
             self.levelHandler(levels)
-        }
-    }
-}
-
-private final class SampleAccumulator: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "viska.audio-capture")
-    private var samples: [Int16] = []
-
-    func append(contentsOf newSamples: [Int16]) {
-        queue.async {
-            self.samples.append(contentsOf: newSamples)
-        }
-    }
-
-    func snapshot() -> [Int16] {
-        queue.sync { samples }
-    }
-
-    func clear() {
-        queue.sync {
-            samples.removeAll(keepingCapacity: false)
         }
     }
 }

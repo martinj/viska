@@ -3,34 +3,40 @@ import XCTest
 
 @MainActor
 final class DictationStoreTests: XCTestCase {
-    func testHoldModeStartsOnPressAndStopsOnRelease() {
+    func testHoldModeStartsOnPressAndStopsOnRelease() async {
         let context = makeContext(mode: .holdToRecord)
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
+        await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
         XCTAssertEqual(context.lifecycle.events, [.started, .stopped])
     }
 
-    func testToggleModeStartsOnFirstActivationAndStopsOnSecond() {
+    func testToggleModeStartsOnFirstActivationAndStopsOnSecond() async {
         let context = makeContext(mode: .toggleToRecord)
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.toggle)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.toggle)
+        await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
         XCTAssertEqual(context.lifecycle.events, [.started, .stopped])
     }
 
-    func testEscapeCancelsRecording() {
+    func testEscapeCancelsRecording() async {
         let context = makeContext(mode: .holdToRecord)
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
         XCTAssertEqual(context.lifecycle.events, [.started, .cancelled])
@@ -46,6 +52,40 @@ final class DictationStoreTests: XCTestCase {
 
         XCTAssertEqual(context.lifecycle.events, [])
         XCTAssertEqual(context.store.state, .inserting)
+    }
+
+    func testRecordingStartFailureAllowsNextHotkeyToRetry() async {
+        let audioCaptureEngine = FakeAudioCaptureEngine(
+            startErrors: [AudioCaptureEngine.Error.inputUnavailable]
+        )
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: audioCaptureEngine
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+        await waitForState(
+            .failed(
+                title: "Recording Failed",
+                message: "Microphone capture failed to start. Try again."
+            ),
+            store: context.store
+        )
+
+        XCTAssertEqual(
+            context.store.state,
+            .failed(
+                title: "Recording Failed",
+                message: "Microphone capture failed to start. Try again."
+            )
+        )
+
+        context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
+
+        XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+        XCTAssertEqual(audioCaptureEngine.startCaptureCallCount, 2)
     }
 
     func testWordReplacementChangesDoNotReconfigureHotkey() {
@@ -83,6 +123,7 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
 
         await waitForIdle(store: context.store)
@@ -92,24 +133,27 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.state, .idle)
 
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
     }
 
     func testTranscriptionHistoryPersistsLatestTenNewestFirst() async throws {
         let historyStore = FakeTranscriptionHistoryStore()
-        let context = try makeContext(
+        let audioCaptureEngine = FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio())
+        let context = makeContext(
             mode: .holdToRecord,
             transcriptionHistoryStore: historyStore,
-            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
+            audioCaptureEngine: audioCaptureEngine,
             transcriptionClient: FakeTranscriptionClient(
                 results: (1...11).map { TranscriptionResult(text: "transcript \($0)") }
             )
         )
 
         context.store.setReady()
-        for _ in 1...11 {
+        for recordingNumber in 1...11 {
             context.store.handleHotkeyEvent(.pressed)
+            await waitForLifecycleEvent(.started, context: context, count: recordingNumber)
             context.store.handleHotkeyEvent(.released)
             await waitForIdle(store: context.store)
         }
@@ -132,6 +176,7 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
 
         await waitForIdle(store: context.store)
@@ -157,6 +202,7 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
 
         await waitForIdle(store: context.store)
@@ -194,6 +240,7 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
 
         await waitForState(
@@ -205,11 +252,12 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
     }
 
-    func testEmptyRecordingFinalizationReturnsToIdleAndAllowsAnotherRecording() {
+    func testEmptyRecordingFinalizationReturnsToIdleAndAllowsAnotherRecording() async {
         let context = makeContext(
             mode: .holdToRecord,
             audioCaptureEngine: FakeAudioCaptureEngine(stopError: AudioCaptureEngine.Error.nothingCaptured)
@@ -217,14 +265,44 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.released)
+        await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
         XCTAssertEqual(context.lifecycle.events, [.started])
 
         context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
+    func testOverlayShowsBeforeCaptureStartupAndReleaseCancelsPendingStart() async {
+        let audioCaptureEngine = FakeAudioCaptureEngine(suspendsStart: true)
+        let overlayController = RecordingOverlaySpy()
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: audioCaptureEngine,
+            overlayController: overlayController
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed)
+
+        await waitForState(.recording(mode: .holdToRecord), store: context.store)
+        await waitForCaptureStart(audioCaptureEngine)
+
+        XCTAssertEqual(overlayController.showCallCount, 1)
+        XCTAssertEqual(context.lifecycle.events, [])
+
+        context.store.handleHotkeyEvent(.released)
+        await waitForIdle(store: context.store)
+        await waitForCaptureCancellation(audioCaptureEngine)
+
+        XCTAssertEqual(overlayController.hideCallCount, 1)
+        XCTAssertEqual(context.lifecycle.events, [])
+        XCTAssertFalse(audioCaptureEngine.isCapturing)
     }
 
     func testReleaseCancelsPendingPermissionStart() async {
@@ -379,6 +457,7 @@ final class DictationStoreTests: XCTestCase {
         transcriptionHistoryStore: any TranscriptionHistoryStoring = FakeTranscriptionHistoryStore(),
         permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
+        overlayController: (any RecordingOverlayControlling)? = nil,
         transcriptionClient: (any AudioTranscribing)? = nil,
         textInsertionService: (any TextInserting)? = nil,
         clipboardService: (any ClipboardControlling)? = nil
@@ -396,6 +475,7 @@ final class DictationStoreTests: XCTestCase {
             transcriptionHistoryStore: transcriptionHistoryStore,
             permissionCoordinator: permissionCoordinator,
             audioCaptureEngine: audioCaptureEngine,
+            overlayController: overlayController,
             transcriptionClient: transcriptionClient,
             textInsertionService: textInsertionService,
             clipboardService: clipboardService,
@@ -454,6 +534,59 @@ final class DictationStoreTests: XCTestCase {
         XCTFail("Timed out waiting for microphone permission request", file: file, line: line)
     }
 
+    private func waitForLifecycleEvent(
+        _ event: DictationLifecycleSpy.Event,
+        context: StoreContext,
+        count: Int = 1,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if context.lifecycle.events.filter({ $0 == event }).count >= count {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for lifecycle event \(event)", file: file, line: line)
+    }
+
+    private func waitForCaptureStart(
+        _ audioCaptureEngine: FakeAudioCaptureEngine,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if audioCaptureEngine.startCaptureCallCount > 0 {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for capture startup", file: file, line: line)
+    }
+
+    private func waitForCaptureCancellation(
+        _ audioCaptureEngine: FakeAudioCaptureEngine,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if audioCaptureEngine.cancelCaptureCallCount > 0 {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for capture cancellation", file: file, line: line)
+    }
+
 
     private static func makeRecordedAudio() throws -> RecordedAudio {
         let fileURL = FileManager.default.temporaryDirectory
@@ -475,21 +608,43 @@ private struct StoreContext {
 private final class FakeAudioCaptureEngine: AudioCaptureControlling {
     private let recordedAudio: RecordedAudio?
     private let stopError: Swift.Error?
+    private let suspendsStart: Bool
+    private var startErrors: [Swift.Error]
+    private var startContinuation: CheckedContinuation<Void, Never>?
     private(set) var startCaptureCallCount = 0
+    private(set) var cancelCaptureCallCount = 0
     private(set) var isCapturing = false
 
-    init(recordedAudio: RecordedAudio? = nil, stopError: Swift.Error? = nil) {
+    init(
+        recordedAudio: RecordedAudio? = nil,
+        stopError: Swift.Error? = nil,
+        startErrors: [Swift.Error] = [],
+        suspendsStart: Bool = false
+    ) {
         self.recordedAudio = recordedAudio
         self.stopError = stopError
+        self.startErrors = startErrors
+        self.suspendsStart = suspendsStart
     }
 
-    func startCapture(levelHandler: @escaping ([Float]) -> Void) throws {
+    func startCapture(levelHandler: @escaping ([Float]) -> Void) async throws {
         startCaptureCallCount += 1
+        if !startErrors.isEmpty {
+            throw startErrors.removeFirst()
+        }
+
+        if suspendsStart {
+            await withCheckedContinuation { continuation in
+                startContinuation = continuation
+            }
+            try Task.checkCancellation()
+        }
+
         isCapturing = true
         levelHandler([Float](repeating: 0.5, count: AudioLevelAnalyzer.bandCount))
     }
 
-    func stopCapture() throws -> RecordedAudio {
+    func stopCapture() async throws -> RecordedAudio {
         isCapturing = false
         if let stopError {
             throw stopError
@@ -502,8 +657,35 @@ private final class FakeAudioCaptureEngine: AudioCaptureControlling {
         return recordedAudio
     }
 
-    func cancelCapture() {
+    func cancelCapture() async {
+        cancelCaptureCallCount += 1
         isCapturing = false
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+}
+
+@MainActor
+private final class RecordingOverlaySpy: RecordingOverlayControlling {
+    private(set) var showCallCount = 0
+    private(set) var showTranscribingCallCount = 0
+    private(set) var hideCallCount = 0
+    private(set) var levels: [[Float]] = []
+
+    func show() {
+        showCallCount += 1
+    }
+
+    func update(levels: [Float]) {
+        self.levels.append(levels)
+    }
+
+    func showTranscribing() {
+        showTranscribingCallCount += 1
+    }
+
+    func hide() {
+        hideCallCount += 1
     }
 }
 

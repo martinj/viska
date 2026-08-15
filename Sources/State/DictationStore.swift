@@ -31,7 +31,9 @@ final class DictationStore: ObservableObject {
     private weak var lifecycle: DictationLifecycleControlling?
     private var preferencesCancellable: AnyCancellable?
     private var pendingStartTask: Task<Void, Never>?
+    private var pendingStopTask: Task<Void, Never>?
     private var pendingTranscriptionTask: Task<Void, Never>?
+    private var recordingStartID: UUID?
 
     init(
         settingsStore: SettingsStore,
@@ -191,7 +193,9 @@ final class DictationStore: ObservableObject {
     }
 
     private func startRecordingIfPossible() {
-        guard canStartRecording else { return }
+        guard canStartRecording,
+              pendingStartTask == nil,
+              pendingStopTask == nil else { return }
 
         let microphoneMessage = "Microphone permission is required before dictation can record."
         refreshPermissionStatuses()
@@ -199,7 +203,7 @@ final class DictationStore: ObservableObject {
         if permissionCoordinator != nil {
             switch microphonePermissionStatus {
             case .granted:
-                performRecordingStart()
+                launchRecordingStart()
                 return
             case .denied, .restricted:
                 setUnavailable(title: "Microphone Required", message: microphoneMessage)
@@ -210,60 +214,42 @@ final class DictationStore: ObservableObject {
         }
 
         if permissionCoordinator == nil {
-            performRecordingStart()
+            launchRecordingStart()
             return
         }
 
-        pendingStartTask?.cancel()
-        pendingStartTask = Task { [weak self] in
-            await self?.beginRecording()
-        }
+        launchRecordingStart()
     }
 
     private func stopRecordingIfNeeded() {
-        if pendingStartTask != nil {
-            pendingStartTask?.cancel()
-            pendingStartTask = nil
+        if recordingStartID != nil {
+            cancelPendingRecordingStart()
             return
         }
 
-        guard case .recording = state else { return }
+        guard case .recording = state, pendingStopTask == nil else { return }
 
-        do {
-            lastRecordedAudio = try audioCaptureEngine?.stopCapture()
-            lifecycle?.recordingDidStop()
-
-            if let transcriptionClient, let lastRecordedAudio {
-                state = .transcribing
-                overlayController?.showTranscribing()
-                pendingTranscriptionTask?.cancel()
-                pendingTranscriptionTask = Task { [weak self] in
-                    await self?.transcribe(audio: lastRecordedAudio, client: transcriptionClient)
-                }
-            } else {
-                overlayController?.hide()
-                state = .idle
-            }
-        } catch AudioCaptureEngine.Error.nothingCaptured {
-            overlayController?.hide()
-            lastRecordedAudio = nil
-            state = .idle
-        } catch {
-            overlayController?.hide()
-            setUnavailable(title: "Recording Failed", message: "Recording could not be finalized.")
+        state = .transcribing
+        overlayController?.showTranscribing()
+        pendingStopTask = Task { [weak self] in
+            await self?.finishRecording()
         }
     }
 
     private func cancelRecordingIfNeeded() {
+        if recordingStartID != nil {
+            cancelPendingRecordingStart()
+            return
+        }
+
         guard case .recording = state else { return }
 
-        pendingStartTask?.cancel()
-        audioCaptureEngine?.cancelCapture()
         overlayController?.hide()
         lastRecordedAudio = nil
         lastTranscript = nil
         lifecycle?.recordingDidCancel()
         state = .idle
+        beginCaptureCleanup()
     }
 
     private func toggleRecording() {
@@ -349,12 +335,16 @@ final class DictationStore: ObservableObject {
         transcriptionHistoryStore.save(transcriptionHistory)
     }
 
-    private func beginRecording() async {
-        defer {
-            pendingStartTask = nil
+    private func launchRecordingStart() {
+        let startID = UUID()
+        recordingStartID = startID
+        pendingStartTask = Task { [weak self] in
+            await self?.beginRecording(id: startID)
         }
+    }
 
-        guard !Task.isCancelled else { return }
+    private func beginRecording(id startID: UUID) async {
+        guard isCurrentRecordingStart(startID) else { return }
 
         let microphoneMessage = "Microphone permission is required before dictation can record."
 
@@ -363,39 +353,103 @@ final class DictationStore: ObservableObject {
             switch microphonePermissionStatus {
             case .notDetermined:
                 guard await permissionCoordinator.requestMicrophonePermission() else {
+                    guard isCurrentRecordingStart(startID) else { return }
                     refreshPermissionStatuses()
                     setUnavailable(title: "Microphone Required", message: microphoneMessage)
+                    finishRecordingStart(id: startID)
                     return
                 }
 
                 refreshPermissionStatuses()
-                guard !Task.isCancelled else { return }
-                performRecordingStart()
-                return
+                guard isCurrentRecordingStart(startID) else { return }
             case .granted:
-                performRecordingStart()
-                return
+                break
             case .denied, .restricted:
+                guard isCurrentRecordingStart(startID) else { return }
                 setUnavailable(title: "Microphone Required", message: microphoneMessage)
+                finishRecordingStart(id: startID)
                 return
             }
         }
 
-        performRecordingStart()
-    }
+        guard isCurrentRecordingStart(startID) else { return }
+        overlayController?.show()
+        state = .recording(mode: settingsStore.preferences.recordingMode)
 
-    private func performRecordingStart() {
         do {
-            try audioCaptureEngine?.startCapture { [weak self] levels in
+            try await audioCaptureEngine?.startCapture { [weak self] levels in
                 self?.overlayController?.update(levels: levels)
             }
-            overlayController?.show()
-            let mode = settingsStore.preferences.recordingMode
-            state = .recording(mode: mode)
+
+            guard isCurrentRecordingStart(startID) else { return }
+            finishRecordingStart(id: startID)
             lifecycle?.recordingDidStart()
+        } catch is CancellationError {
+            guard isCurrentRecordingStart(startID) else { return }
+            overlayController?.hide()
+            state = .idle
+            finishRecordingStart(id: startID)
         } catch {
-            setUnavailable(title: "Recording Failed", message: "Microphone capture failed to start.")
+            guard isCurrentRecordingStart(startID) else { return }
+            overlayController?.hide()
+            setFailed(title: "Recording Failed", message: "Microphone capture failed to start. Try again.")
+            finishRecordingStart(id: startID)
         }
+    }
+
+    private func finishRecording() async {
+        defer {
+            pendingStopTask = nil
+        }
+
+        do {
+            lastRecordedAudio = try await audioCaptureEngine?.stopCapture()
+            lifecycle?.recordingDidStop()
+
+            if let transcriptionClient, let lastRecordedAudio {
+                pendingTranscriptionTask?.cancel()
+                pendingTranscriptionTask = Task { [weak self] in
+                    await self?.transcribe(audio: lastRecordedAudio, client: transcriptionClient)
+                }
+            } else {
+                overlayController?.hide()
+                state = .idle
+            }
+        } catch AudioCaptureEngine.Error.nothingCaptured {
+            overlayController?.hide()
+            lastRecordedAudio = nil
+            state = .idle
+        } catch {
+            overlayController?.hide()
+            setFailed(title: "Recording Failed", message: "Recording could not be finalized.")
+        }
+    }
+
+    private func cancelPendingRecordingStart() {
+        recordingStartID = nil
+        pendingStartTask?.cancel()
+        pendingStartTask = nil
+        overlayController?.hide()
+        lastRecordedAudio = nil
+        state = .idle
+        beginCaptureCleanup()
+    }
+
+    private func beginCaptureCleanup() {
+        pendingStartTask = Task { [weak self, audioCaptureEngine] in
+            await audioCaptureEngine?.cancelCapture()
+            self?.pendingStartTask = nil
+        }
+    }
+
+    private func isCurrentRecordingStart(_ startID: UUID) -> Bool {
+        recordingStartID == startID && !Task.isCancelled
+    }
+
+    private func finishRecordingStart(id startID: UUID) {
+        guard recordingStartID == startID else { return }
+        recordingStartID = nil
+        pendingStartTask = nil
     }
 
     private var canStartRecording: Bool {

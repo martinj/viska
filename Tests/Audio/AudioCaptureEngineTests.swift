@@ -3,29 +3,21 @@ import XCTest
 @testable import Viska
 
 final class AudioCaptureEngineTests: XCTestCase {
-    func testCaptureFormatUsesHardwareInputFormatWhenSampleRateDrifts() {
-        let hardwareInputFormat = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
-        let nodeOutputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    func testRecordingSettingsProduceMono16BitPCMAtTranscriptionSampleRate() {
+        let settings = AudioCaptureEngine.recordingSettings()
 
-        let captureFormat = AudioCaptureEngine.captureFormat(
-            hardwareInputFormat: hardwareInputFormat,
-            nodeOutputFormat: nodeOutputFormat
-        )
-
-        XCTAssertEqual(captureFormat.sampleRate, hardwareInputFormat.sampleRate)
-        XCTAssertEqual(captureFormat.channelCount, hardwareInputFormat.channelCount)
+        XCTAssertEqual(settings[AVFormatIDKey] as? UInt32, kAudioFormatLinearPCM)
+        XCTAssertEqual(settings[AVSampleRateKey] as? Int, 16_000)
+        XCTAssertEqual(settings[AVNumberOfChannelsKey] as? Int, 1)
+        XCTAssertEqual(settings[AVLinearPCMBitDepthKey] as? Int, 16)
+        XCTAssertEqual(settings[AVLinearPCMIsFloatKey] as? Bool, false)
+        XCTAssertEqual(settings[AVLinearPCMIsBigEndianKey] as? Bool, false)
     }
 
-    func testCaptureFormatKeepsNodeOutputFormatWhenItMatchesHardware() {
-        let hardwareInputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
-        let nodeOutputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
-
-        let captureFormat = AudioCaptureEngine.captureFormat(
-            hardwareInputFormat: hardwareInputFormat,
-            nodeOutputFormat: nodeOutputFormat
-        )
-
-        XCTAssertEqual(captureFormat.sampleRate, nodeOutputFormat.sampleRate)
-        XCTAssertEqual(captureFormat.channelCount, nodeOutputFormat.channelCount)
+    func testMeterLevelIsClampedAndSilenceIsZero() {
+        XCTAssertEqual(AudioCaptureEngine.normalizedMeterLevel(decibels: -80), 0)
+        XCTAssertEqual(AudioCaptureEngine.normalizedMeterLevel(decibels: 0), 1)
+        XCTAssertGreaterThan(AudioCaptureEngine.normalizedMeterLevel(decibels: -20), 0)
+        XCTAssertLessThan(AudioCaptureEngine.normalizedMeterLevel(decibels: -20), 1)
     }
 }

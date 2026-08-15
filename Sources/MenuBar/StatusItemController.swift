@@ -7,7 +7,7 @@ final class StatusItemController: NSObject {
     private let dependencies: AppDependencies
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
-    private var transcriptionHistoryCancellable: AnyCancellable?
+    private var popoverContentCancellable: AnyCancellable?
     private var wordReplacementsWindowController: WordReplacementsWindowController?
 
     init(dependencies: AppDependencies) {
@@ -32,9 +32,17 @@ final class StatusItemController: NSObject {
             )
         )
         updatePopoverContentSize()
-        transcriptionHistoryCancellable = dependencies.dictationStore.$transcriptionHistory
-            .sink { [weak self] history in
-                self?.updatePopoverContentSize(forHistoryCount: history.count)
+        popoverContentCancellable = Publishers.CombineLatest3(
+            dependencies.dictationStore.$transcriptionHistory,
+            dependencies.dictationStore.$state,
+            dependencies.dictationStore.$hotkeyErrorMessage
+        )
+            .sink { [weak self] history, state, hotkeyErrorMessage in
+                self?.updatePopoverContentSize(
+                    forHistoryCount: history.count,
+                    state: state,
+                    hotkeyErrorMessage: hotkeyErrorMessage
+                )
             }
 
         guard let button = statusItem.button else { return }
@@ -101,10 +109,23 @@ final class StatusItemController: NSObject {
     }
 
     private func updatePopoverContentSize() {
-        updatePopoverContentSize(forHistoryCount: dependencies.dictationStore.transcriptionHistory.count)
+        let dictationStore = dependencies.dictationStore
+        updatePopoverContentSize(
+            forHistoryCount: dictationStore.transcriptionHistory.count,
+            state: dictationStore.state,
+            hotkeyErrorMessage: dictationStore.hotkeyErrorMessage
+        )
     }
 
-    private func updatePopoverContentSize(forHistoryCount historyCount: Int) {
-        popover.contentSize = MenuContentView.contentSize(forHistoryCount: historyCount)
+    private func updatePopoverContentSize(
+        forHistoryCount historyCount: Int,
+        state: DictationState,
+        hotkeyErrorMessage: String?
+    ) {
+        popover.contentSize = MenuContentView.contentSize(
+            forHistoryCount: historyCount,
+            showsStatusDetail: MenuContentView.showsStatusDetail(for: state),
+            showsHotkeyError: hotkeyErrorMessage != nil
+        )
     }
 }

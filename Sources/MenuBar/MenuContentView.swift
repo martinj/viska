@@ -3,13 +3,26 @@ import SwiftUI
 
 struct MenuContentView: View {
     static let contentWidth: CGFloat = 320
+    private static let maximumVisibleHistoryRows = 4
+    private static let auxiliaryMessageHeight: CGFloat = 28
 
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var dictationStore: DictationStore
     let openWordReplacements: () -> Void
 
-    static func contentSize(forHistoryCount historyCount: Int) -> NSSize {
-        NSSize(width: contentWidth, height: contentHeight(forHistoryCount: historyCount))
+    static func contentSize(
+        forHistoryCount historyCount: Int,
+        showsStatusDetail: Bool = false,
+        showsHotkeyError: Bool = false
+    ) -> NSSize {
+        NSSize(
+            width: contentWidth,
+            height: contentHeight(
+                forHistoryCount: historyCount,
+                showsStatusDetail: showsStatusDetail,
+                showsHotkeyError: showsHotkeyError
+            )
+        )
     }
 
     var body: some View {
@@ -140,13 +153,20 @@ struct MenuContentView: View {
                             .foregroundStyle(.tertiary)
                             .frame(height: 28, alignment: .center)
                     } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(dictationStore.transcriptionHistory) { item in
-                                TranscriptionHistoryRow(item: item) {
-                                    dictationStore.copyTranscript(id: item.id)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                ForEach(dictationStore.transcriptionHistory) { item in
+                                    TranscriptionHistoryRow(item: item) {
+                                        dictationStore.copyTranscript(id: item.id)
+                                    }
                                 }
                             }
                         }
+                        .frame(
+                            maxHeight: Self.historyViewportHeight(
+                                forHistoryCount: dictationStore.transcriptionHistory.count
+                            )
+                        )
                     }
                 }
             }
@@ -180,7 +200,11 @@ struct MenuContentView: View {
         }
         .frame(
             width: Self.contentWidth,
-            height: Self.contentHeight(forHistoryCount: dictationStore.transcriptionHistory.count),
+            height: Self.contentHeight(
+                forHistoryCount: dictationStore.transcriptionHistory.count,
+                showsStatusDetail: shouldShowStatusDetail,
+                showsHotkeyError: dictationStore.hotkeyErrorMessage != nil
+            ),
             alignment: .topLeading
         )
     }
@@ -200,11 +224,17 @@ struct MenuContentView: View {
         }
     }
 
-    private static func contentHeight(forHistoryCount historyCount: Int) -> CGFloat {
-        let clampedCount = min(max(historyCount, 0), 10)
+    private static func contentHeight(
+        forHistoryCount historyCount: Int,
+        showsStatusDetail: Bool,
+        showsHotkeyError: Bool
+    ) -> CGFloat {
+        let clampedCount = min(max(historyCount, 0), maximumVisibleHistoryRows)
+        let auxiliaryHeight = (showsStatusDetail ? auxiliaryMessageHeight : 0)
+            + (showsHotkeyError ? auxiliaryMessageHeight : 0)
         // +58 for the Word Replacements section: 14 outer spacing + 14 label
         // + 6 inner spacing + 24 row. Keep the empty-state constant in sync.
-        guard clampedCount > 0 else { return 448 }
+        guard clampedCount > 0 else { return 448 + auxiliaryHeight }
 
         let baseHeight: CGFloat = 384
         let recentLabelHeight: CGFloat = 14
@@ -216,7 +246,16 @@ struct MenuContentView: View {
             + (CGFloat(clampedCount) * rowHeight)
             + (CGFloat(max(clampedCount - 1, 0)) * rowSpacing)
 
-        return baseHeight + historyHeight
+        return baseHeight + historyHeight + auxiliaryHeight
+    }
+
+    private static func historyViewportHeight(forHistoryCount historyCount: Int) -> CGFloat {
+        let visibleRowCount = min(max(historyCount, 0), maximumVisibleHistoryRows)
+        let rowHeight: CGFloat = 46
+        let rowSpacing: CGFloat = 2
+
+        return (CGFloat(visibleRowCount) * rowHeight)
+            + (CGFloat(max(visibleRowCount - 1, 0)) * rowSpacing)
     }
 
     private func permissionRow(
@@ -303,7 +342,11 @@ struct MenuContentView: View {
     }
 
     private var shouldShowStatusDetail: Bool {
-        switch dictationStore.state {
+        Self.showsStatusDetail(for: dictationStore.state)
+    }
+
+    static func showsStatusDetail(for state: DictationState) -> Bool {
+        switch state {
         case .unavailable, .failed:
             true
         case .idle, .recording, .transcribing, .inserting:
