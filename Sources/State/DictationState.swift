@@ -6,6 +6,7 @@ enum DictationState: Equatable {
     case idle
     case recording(mode: RecordingMode)
     case transcribing
+    case processing(actionName: String)
     case inserting
 
     var statusTitle: String {
@@ -20,6 +21,8 @@ enum DictationState: Equatable {
             "Recording"
         case .transcribing:
             "Transcribing"
+        case .processing:
+            "Processing"
         case .inserting:
             "Inserting"
         }
@@ -42,6 +45,8 @@ enum DictationState: Equatable {
             }
         case .transcribing:
             "Audio capture has stopped and transcription is in flight."
+        case .processing(let actionName):
+            "Running \(actionName) with Codex. Press Esc to cancel."
         case .inserting:
             "The transcript is being inserted into the focused app."
         }

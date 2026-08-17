@@ -3,34 +3,51 @@ import Carbon.HIToolbox
 import SwiftUI
 
 struct HotkeyRecorderView: View {
-    let currentHotkey: HotkeyDescriptor
+    let currentHotkey: HotkeyDescriptor?
+    var onHotkeyClear: (() -> Void)? = nil
     let onHotkeyChange: (HotkeyDescriptor) -> Void
 
     @StateObject private var coordinator = HotkeyCaptureCoordinator()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button {
-                coordinator.toggleCapture(onHotkeyChange: onHotkeyChange)
-            } label: {
-                HStack(spacing: 6) {
-                    Text(coordinator.isCapturing ? "Press shortcut…" : currentHotkey.displayString)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(coordinator.isCapturing ? .secondary : .primary)
-                    Spacer()
-                    Image(systemName: coordinator.isCapturing ? "record.circle.fill" : "keyboard")
-                        .font(.system(size: 11))
-                        .foregroundStyle(coordinator.isCapturing ? Color.red : Color.secondary)
+            HStack(spacing: 6) {
+                Button {
+                    coordinator.toggleCapture(onHotkeyChange: onHotkeyChange)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(coordinator.isCapturing ? "Press shortcut…" : currentHotkey?.displayString ?? "Set shortcut")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(coordinator.isCapturing ? .secondary : .primary)
+                        Spacer()
+                        Image(systemName: coordinator.isCapturing ? "record.circle.fill" : "keyboard")
+                            .font(.system(size: 11))
+                            .foregroundStyle(coordinator.isCapturing ? Color.red : Color.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(coordinator.isCapturing ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
+                    )
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(coordinator.isCapturing ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
-                )
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+
+                if currentHotkey != nil, let onHotkeyClear {
+                    Button {
+                        coordinator.stopCapture()
+                        onHotkeyClear()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Unbind shortcut")
+                    .accessibilityLabel("Unbind shortcut")
+                }
             }
-            .buttonStyle(.plain)
 
             if let errorMessage = coordinator.errorMessage {
                 Text(errorMessage)

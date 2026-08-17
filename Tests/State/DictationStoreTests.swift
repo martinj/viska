@@ -113,6 +113,23 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.hotkeyService.configureCallCount, 3)
     }
 
+    func testUnbindingActionKeepsItSavedAndRemovesItsRegistration() throws {
+        let context = makeContext(mode: .holdToRecord)
+        var action = makeAction(name: "Clean up", keyCode: 1)
+
+        try context.store.saveDictationAction(action)
+        XCTAssertEqual(context.hotkeyService.configuredRegistrations.count, 2)
+
+        action.hotkey = nil
+        try context.store.saveDictationAction(action)
+
+        XCTAssertEqual(context.settingsStore.preferences.dictationActions, [action])
+        XCTAssertEqual(
+            context.hotkeyService.configuredRegistrations.map(\.descriptor),
+            [context.settingsStore.preferences.hotkey]
+        )
+    }
+
     func testClipboardFallbackReturnsToIdleAndAllowsAnotherRecording() async throws {
         let context = try makeContext(
             mode: .holdToRecord,
@@ -227,6 +244,95 @@ final class DictationStoreTests: XCTestCase {
         context.store.copyTranscript(id: item.id)
 
         XCTAssertEqual(clipboard.value, "saved transcript")
+    }
+
+    func testApplyingUnboundActionToRecentCopiesProcessedTextWithoutChangingHistory() async {
+        let item = TranscriptionHistoryItem(id: UUID(), text: "rough source", createdAt: Date())
+        var action = makeAction(name: "Make it prompt ready", keyCode: 1)
+        action.hotkey = nil
+        let historyStore = FakeTranscriptionHistoryStore(loadedItems: [item])
+        let processor = FakeTextProcessor(results: [.success("Polished result")])
+        let clipboard = FakeClipboardService()
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            transcriptionHistoryStore: historyStore,
+            textProcessor: processor,
+            textInsertionService: insertion,
+            clipboardService: clipboard
+        )
+
+        context.store.setReady()
+        context.store.applyDictationAction(id: action.id, toTranscriptID: item.id)
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(processor.sourceTexts, ["rough source"])
+        XCTAssertEqual(processor.actions, [action])
+        XCTAssertEqual(clipboard.value, "Polished result")
+        XCTAssertEqual(context.store.transcriptionHistory, [item])
+        XCTAssertEqual(historyStore.savedItems, [])
+        XCTAssertEqual(insertion.insertedTexts, [])
+        XCTAssertEqual(context.store.recentActionFeedback(for: item.id), .copied)
+    }
+
+    func testApplyingActionToRecentFailureLeavesClipboardAndHistoryUnchanged() async {
+        let item = TranscriptionHistoryItem(id: UUID(), text: "recoverable source", createdAt: Date())
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let historyStore = FakeTranscriptionHistoryStore(loadedItems: [item])
+        let processor = FakeTextProcessor(results: [.failure(CodexAppServerClient.Error.invalidOutput)])
+        let clipboard = FakeClipboardService()
+        clipboard.setString("existing clipboard")
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            transcriptionHistoryStore: historyStore,
+            textProcessor: processor,
+            clipboardService: clipboard
+        )
+
+        context.store.setReady()
+        context.store.applyDictationAction(id: action.id, toTranscriptID: item.id)
+        await waitForState(
+            .failed(title: "Processing Failed", message: "Codex returned an invalid result. Try again."),
+            store: context.store
+        )
+
+        XCTAssertEqual(clipboard.value, "existing clipboard")
+        XCTAssertEqual(context.store.transcriptionHistory, [item])
+        XCTAssertEqual(historyStore.savedItems, [])
+        XCTAssertEqual(
+            context.store.recentActionFeedback(for: item.id),
+            .failed(message: "Codex returned an invalid result. Try again.")
+        )
+    }
+
+    func testCancellingRecentActionDoesNotDuplicateHistoryOrCopyLateOutput() async {
+        let item = TranscriptionHistoryItem(id: UUID(), text: "original source", createdAt: Date())
+        let action = makeAction(name: "Translate", keyCode: 1)
+        let historyStore = FakeTranscriptionHistoryStore(loadedItems: [item])
+        let processor = FakeTextProcessor(suspends: true)
+        let clipboard = FakeClipboardService()
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            transcriptionHistoryStore: historyStore,
+            textProcessor: processor,
+            clipboardService: clipboard
+        )
+
+        context.store.setReady()
+        context.store.applyDictationAction(id: action.id, toTranscriptID: item.id)
+        await waitForState(.processing(actionName: "Translate"), store: context.store)
+        context.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: context.store)
+        processor.complete(with: .success("Late output"))
+        await Task.yield()
+
+        XCTAssertNil(clipboard.value)
+        XCTAssertEqual(context.store.transcriptionHistory, [item])
+        XCTAssertEqual(historyStore.savedItems, [])
+        XCTAssertNil(context.store.recentActionFeedback)
     }
 
     func testTranscriptionRequestFailureAllowsAnotherRecording() async throws {
@@ -451,14 +557,141 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.accessibilityPermissionStatus, .denied)
     }
 
+    func testActionAppliesReplacementsBeforeProcessingAndStoresOnlyProcessedText() async throws {
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let processor = FakeTextProcessor(results: [.success("Finished text")])
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let overlay = RecordingOverlaySpy()
+        let context = makeContext(
+            mode: .holdToRecord,
+            wordReplacements: [WordReplacement(id: UUID(), trigger: "paper trail", replacement: "papertrail")],
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            overlayController: overlay,
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Paper Trail, please")),
+            textProcessor: processor,
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .action(action)))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .action(action)))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(processor.sourceTexts, ["papertrail, please"])
+        XCTAssertEqual(processor.actions, [action])
+        XCTAssertEqual(insertion.insertedTexts, ["Finished text"])
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Finished text"])
+        XCTAssertEqual(overlay.processingActionNames, ["Clean up"])
+        XCTAssertEqual(overlay.showInsertingCallCount, 1)
+    }
+
+    func testActionIsSnapshottedWhenRecordingStarts() async throws {
+        let original = makeAction(name: "Original", keyCode: 1, prompt: "Original prompt")
+        var edited = original
+        edited.name = "Edited"
+        edited.prompt = "Edited prompt"
+        let processor = FakeTextProcessor(results: [.success("Output")])
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [original],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Source")),
+            textProcessor: processor
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .action(original)))
+        await waitForLifecycleEvent(.started, context: context)
+        try context.settingsStore.updateDictationActions([edited])
+        context.store.handleHotkeyEvent(.released(route: .action(edited)))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(processor.actions, [original])
+    }
+
+    func testProcessingFailurePreservesSourceWithoutInsertionAndRemainsRetryable() async throws {
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let processor = FakeTextProcessor(results: [.failure(CodexAppServerClient.Error.invalidOutput)])
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Recover me")),
+            textProcessor: processor,
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .action(action)))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .action(action)))
+        await waitForState(
+            .failed(title: "Processing Failed", message: "Codex returned an invalid result. Try again."),
+            store: context.store
+        )
+
+        XCTAssertEqual(insertion.insertedTexts, [])
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Recover me"])
+        context.store.handleHotkeyEvent(.pressed)
+        await waitForLifecycleEvent(.started, context: context, count: 2)
+    }
+
+    func testEscapeCancelsProcessingPreservesSourceAndIgnoresLateCompletion() async throws {
+        let action = makeAction(name: "Translate", keyCode: 1)
+        let processor = FakeTextProcessor(suspends: true)
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Källtext")),
+            textProcessor: processor,
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .action(action)))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .action(action)))
+        await waitForState(.processing(actionName: "Translate"), store: context.store)
+        context.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: context.store)
+        processor.complete(with: .success("Late output"))
+        await Task.yield()
+
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Källtext"])
+        XCTAssertEqual(insertion.insertedTexts, [])
+        XCTAssertEqual(context.store.state, .idle)
+    }
+
+    func testOtherRouteCannotStartOrStopConcurrentRecording() async {
+        let action = makeAction(name: "Action", keyCode: 1)
+        let audio = FakeAudioCaptureEngine()
+        let context = makeContext(mode: .holdToRecord, actions: [action], audioCaptureEngine: audio)
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .action(action)))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
+        context.store.handleHotkeyEvent(.released(route: .plain))
+
+        XCTAssertEqual(audio.startCaptureCallCount, 1)
+        XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
+    }
+
     private func makeContext(
         mode: RecordingMode,
         wordReplacements: [WordReplacement] = [],
+        actions: [DictationAction] = [],
         transcriptionHistoryStore: any TranscriptionHistoryStoring = FakeTranscriptionHistoryStore(),
         permissionCoordinator: (any PermissionCoordinating)? = nil,
         audioCaptureEngine: (any AudioCaptureControlling)? = nil,
         overlayController: (any RecordingOverlayControlling)? = nil,
         transcriptionClient: (any AudioTranscribing)? = nil,
+        textProcessor: (any TextProcessing)? = nil,
         textInsertionService: (any TextInserting)? = nil,
         clipboardService: (any ClipboardControlling)? = nil
     ) -> StoreContext {
@@ -466,6 +699,7 @@ final class DictationStoreTests: XCTestCase {
         let settingsStore = SettingsStore(userDefaults: defaults)
         settingsStore.updateRecordingMode(mode)
         settingsStore.updateWordReplacements(wordReplacements)
+        try! settingsStore.updateDictationActions(actions)
 
         let hotkeyService = FakeGlobalHotkeyService()
         let lifecycle = DictationLifecycleSpy()
@@ -477,6 +711,7 @@ final class DictationStoreTests: XCTestCase {
             audioCaptureEngine: audioCaptureEngine,
             overlayController: overlayController,
             transcriptionClient: transcriptionClient,
+            textProcessor: textProcessor,
             textInsertionService: textInsertionService,
             clipboardService: clipboardService,
             lifecycle: lifecycle,
@@ -488,6 +723,20 @@ final class DictationStoreTests: XCTestCase {
             settingsStore: settingsStore,
             hotkeyService: hotkeyService,
             lifecycle: lifecycle
+        )
+    }
+
+    private func makeAction(
+        name: String,
+        keyCode: UInt32,
+        prompt: String = "Transform."
+    ) -> DictationAction {
+        DictationAction(
+            id: UUID(),
+            name: name,
+            hotkey: HotkeyDescriptor(keyCode: keyCode, modifiers: HotkeyDescriptor.requiredModifierFlags),
+            model: "gpt-5.6-luna",
+            prompt: prompt
         )
     }
 
@@ -670,6 +919,8 @@ private final class RecordingOverlaySpy: RecordingOverlayControlling {
     private(set) var showCallCount = 0
     private(set) var showTranscribingCallCount = 0
     private(set) var hideCallCount = 0
+    private(set) var processingActionNames: [String] = []
+    private(set) var showInsertingCallCount = 0
     private(set) var levels: [[Float]] = []
 
     func show() {
@@ -682,6 +933,14 @@ private final class RecordingOverlaySpy: RecordingOverlayControlling {
 
     func showTranscribing() {
         showTranscribingCallCount += 1
+    }
+
+    func showProcessing(actionName: String) {
+        processingActionNames.append(actionName)
+    }
+
+    func showInserting() {
+        showInsertingCallCount += 1
     }
 
     func hide() {
@@ -710,6 +969,33 @@ private final class FakeTranscriptionClient: AudioTranscribing, @unchecked Senda
         }
 
         return try results[0].get()
+    }
+}
+
+private final class FakeTextProcessor: TextProcessing, @unchecked Sendable {
+    private var results: [Result<String, Swift.Error>]
+    private let suspends: Bool
+    private var continuation: CheckedContinuation<String, Swift.Error>?
+    private(set) var sourceTexts: [String] = []
+    private(set) var actions: [DictationAction] = []
+
+    init(results: [Result<String, Swift.Error>] = [], suspends: Bool = false) {
+        self.results = results
+        self.suspends = suspends
+    }
+
+    func process(sourceText: String, action: DictationAction) async throws -> String {
+        sourceTexts.append(sourceText)
+        actions.append(action)
+        if suspends {
+            return try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+        return try results.removeFirst().get()
+    }
+
+    func complete(with result: Result<String, Swift.Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }
 
@@ -838,13 +1124,13 @@ private final class FakePermissionCoordinator: PermissionCoordinating {
 @MainActor
 private final class FakeGlobalHotkeyService: GlobalHotkeyControlling {
     var onEvent: ((GlobalHotkeyService.Event) -> Void)?
-    private(set) var configuredDescriptor: HotkeyDescriptor?
+    private(set) var configuredRegistrations: [DictationHotkeyRegistration] = []
     private(set) var configuredMode: RecordingMode?
     private(set) var configureCallCount = 0
 
-    func configure(descriptor: HotkeyDescriptor, mode: RecordingMode) throws {
+    func configure(registrations: [DictationHotkeyRegistration], mode: RecordingMode) throws {
         configureCallCount += 1
-        configuredDescriptor = descriptor
+        configuredRegistrations = registrations
         configuredMode = mode
     }
 }

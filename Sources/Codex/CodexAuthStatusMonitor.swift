@@ -89,6 +89,18 @@ final class CodexAuthStatusMonitor {
                 return .serverUnavailable(message)
             case .invalidResponse:
                 return .serverUnavailable("Received an invalid response from Codex.")
+            case .unavailableModel(let model):
+                return .serverUnavailable("Codex model \(model) is unavailable.")
+            case .unsupportedReasoningEffort(let model, let effort):
+                return .serverUnavailable("Codex model \(model) does not support \(effort) reasoning.")
+            case .invalidOutput:
+                return .serverUnavailable("Codex returned invalid output.")
+            case .turnFailed(let message):
+                return .serverUnavailable(message)
+            case .interrupted:
+                return .serverUnavailable("Codex request was interrupted.")
+            case .timedOut:
+                return .serverUnavailable("Codex request timed out.")
             }
         } catch {
             return .serverUnavailable(error.localizedDescription)
