@@ -9,6 +9,7 @@ struct MenuContentView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var dictationStore: DictationStore
     let openWordReplacements: () -> Void
+    let openDictationActions: () -> Void
 
     static func contentSize(
         forHistoryCount historyCount: Int,
@@ -142,6 +143,20 @@ struct MenuContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("Dictation Actions")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    SettingsMenuRow(
+                        systemImage: "wand.and.sparkles",
+                        label: Self.actionCountLabel(settingsStore.preferences.dictationActions.count),
+                        help: "Edit dictation actions",
+                        action: openDictationActions
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Recent")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -154,10 +169,25 @@ struct MenuContentView: View {
                             .frame(height: 28, alignment: .center)
                     } else {
                         ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 2) {
+                            LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(dictationStore.transcriptionHistory) { item in
-                                    TranscriptionHistoryRow(item: item) {
-                                        dictationStore.copyTranscript(id: item.id)
+                                    TranscriptionHistoryRow(
+                                        item: item,
+                                        actions: settingsStore.preferences.dictationActions,
+                                        actionFeedback: dictationStore.recentActionFeedback(for: item.id),
+                                        canApplyAction: dictationStore.canApplyActionToRecent,
+                                        applyAction: { actionID in
+                                            dictationStore.applyDictationAction(
+                                                id: actionID,
+                                                toTranscriptID: item.id
+                                            )
+                                        },
+                                        copy: { dictationStore.copyTranscript(id: item.id) }
+                                    )
+
+                                    if item.id != dictationStore.transcriptionHistory.last?.id {
+                                        Divider()
+                                            .padding(.leading, 6)
                                     }
                                 }
                             }
@@ -224,6 +254,14 @@ struct MenuContentView: View {
         }
     }
 
+    static func actionCountLabel(_ count: Int) -> String {
+        switch count {
+        case 0: "No actions yet"
+        case 1: "1 action"
+        default: "\(count) actions"
+        }
+    }
+
     private static func contentHeight(
         forHistoryCount historyCount: Int,
         showsStatusDetail: Bool,
@@ -232,30 +270,29 @@ struct MenuContentView: View {
         let clampedCount = min(max(historyCount, 0), maximumVisibleHistoryRows)
         let auxiliaryHeight = (showsStatusDetail ? auxiliaryMessageHeight : 0)
             + (showsHotkeyError ? auxiliaryMessageHeight : 0)
-        // +58 for the Word Replacements section: 14 outer spacing + 14 label
-        // + 6 inner spacing + 24 row. Keep the empty-state constant in sync.
-        guard clampedCount > 0 else { return 448 + auxiliaryHeight }
+        // Two 58-point management sections. Keep the empty-state constant in sync.
+        guard clampedCount > 0 else { return 506 + auxiliaryHeight }
 
-        let baseHeight: CGFloat = 384
+        let baseHeight: CGFloat = 442
         let recentLabelHeight: CGFloat = 14
         let recentSpacing: CGFloat = 6
-        let rowHeight: CGFloat = 46
-        let rowSpacing: CGFloat = 2
+        let rowHeight: CGFloat = 52
+        let dividerHeight: CGFloat = 1
         let historyHeight = recentLabelHeight
             + recentSpacing
             + (CGFloat(clampedCount) * rowHeight)
-            + (CGFloat(max(clampedCount - 1, 0)) * rowSpacing)
+            + (CGFloat(max(clampedCount - 1, 0)) * dividerHeight)
 
         return baseHeight + historyHeight + auxiliaryHeight
     }
 
     private static func historyViewportHeight(forHistoryCount historyCount: Int) -> CGFloat {
         let visibleRowCount = min(max(historyCount, 0), maximumVisibleHistoryRows)
-        let rowHeight: CGFloat = 46
-        let rowSpacing: CGFloat = 2
+        let rowHeight: CGFloat = 52
+        let dividerHeight: CGFloat = 1
 
         return (CGFloat(visibleRowCount) * rowHeight)
-            + (CGFloat(max(visibleRowCount - 1, 0)) * rowSpacing)
+            + (CGFloat(max(visibleRowCount - 1, 0)) * dividerHeight)
     }
 
     private func permissionRow(
@@ -321,7 +358,7 @@ struct MenuContentView: View {
             "checkmark.circle.fill"
         case .recording:
             "mic.circle.fill"
-        case .transcribing:
+        case .transcribing, .processing:
             "waveform.and.magnifyingglass"
         case .inserting:
             "text.cursor"
@@ -336,7 +373,7 @@ struct MenuContentView: View {
             .green
         case .recording:
             .red
-        case .transcribing, .inserting:
+        case .transcribing, .processing, .inserting:
             .blue
         }
     }
@@ -349,7 +386,7 @@ struct MenuContentView: View {
         switch state {
         case .unavailable, .failed:
             true
-        case .idle, .recording, .transcribing, .inserting:
+        case .idle, .recording, .transcribing, .processing, .inserting:
             false
         }
     }
@@ -403,12 +440,16 @@ struct MenuContentView: View {
 
 private struct TranscriptionHistoryRow: View {
     let item: TranscriptionHistoryItem
+    let actions: [DictationAction]
+    let actionFeedback: RecentActionFeedback.Phase?
+    let canApplyAction: Bool
+    let applyAction: (DictationAction.ID) -> Void
     let copy: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(relativeTimestamp(for: item.createdAt))
                     .font(.system(size: 10, weight: .medium))
@@ -423,16 +464,20 @@ private struct TranscriptionHistoryRow: View {
 
             Spacer(minLength: 8)
 
-            Button(action: copy) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            HStack(spacing: 2) {
+                recentActionMenu
+
+                Button(action: copy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Copy transcript")
             }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .help("Copy transcript")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
@@ -440,8 +485,86 @@ private struct TranscriptionHistoryRow: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
         )
-        .frame(height: 46)
+        .frame(height: 52)
         .onHover { isHovered = $0 }
+    }
+
+    private var recentActionMenu: some View {
+        ZStack {
+            Menu {
+                Section("Apply Action") {
+                    ForEach(actions) { action in
+                        Button {
+                            applyAction(action.id)
+                        } label: {
+                            Label(action.name, systemImage: "wand.and.sparkles")
+                        }
+                    }
+                }
+
+                Divider()
+
+                Text("Copies the result")
+            } label: {
+                Image(systemName: "wand.and.sparkles")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(actions.isEmpty ? .tertiary : .secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(actions.isEmpty || !canApplyAction)
+            .opacity(actionFeedback == nil ? 1 : 0)
+
+            if actionFeedback != nil {
+                recentActionFeedbackLabel
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+        .help(recentActionHelp)
+        .animation(.easeOut(duration: 0.12), value: actionFeedback)
+    }
+
+    @ViewBuilder
+    private var recentActionFeedbackLabel: some View {
+        switch actionFeedback {
+        case .processing:
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+        case .copied:
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 24, height: 24)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.orange)
+                .frame(width: 24, height: 24)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var recentActionHelp: String {
+        switch actionFeedback {
+        case .processing(let actionName):
+            "Processing with \(actionName)…"
+        case .copied:
+            "Copied transformed text"
+        case .failed(let message):
+            message
+        case nil where actions.isEmpty:
+            "Create a Dictation Action first"
+        case nil:
+            "Apply a Dictation Action and copy the result"
+        }
     }
 
     private func relativeTimestamp(for date: Date) -> String {
@@ -463,8 +586,10 @@ private struct TranscriptionHistoryRow: View {
     }
 }
 
-private struct WordReplacementsMenuRow: View {
+private struct SettingsMenuRow: View {
+    let systemImage: String
     let label: String
+    let help: String
     let action: () -> Void
 
     @State private var isHovered = false
@@ -472,7 +597,7 @@ private struct WordReplacementsMenuRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.left.arrow.right")
+                Image(systemName: systemImage)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
@@ -497,8 +622,22 @@ private struct WordReplacementsMenuRow: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
-        .help("Edit word replacements")
+        .help(help)
         .onHover { isHovered = $0 }
+    }
+}
+
+private struct WordReplacementsMenuRow: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        SettingsMenuRow(
+            systemImage: "arrow.left.arrow.right",
+            label: label,
+            help: "Edit word replacements",
+            action: action
+        )
     }
 }
 

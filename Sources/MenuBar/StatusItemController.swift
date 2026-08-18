@@ -9,6 +9,7 @@ final class StatusItemController: NSObject {
     private let popover = NSPopover()
     private var popoverContentCancellable: AnyCancellable?
     private var wordReplacementsWindowController: WordReplacementsWindowController?
+    private var dictationActionsWindowController: DictationActionsWindowController?
 
     init(dependencies: AppDependencies) {
         self.dependencies = dependencies
@@ -28,6 +29,9 @@ final class StatusItemController: NSObject {
                 dictationStore: dependencies.dictationStore,
                 openWordReplacements: { [weak self] in
                     self?.openWordReplacements()
+                },
+                openDictationActions: { [weak self] in
+                    self?.openDictationActions()
                 }
             )
         )
@@ -105,6 +109,23 @@ final class StatusItemController: NSObject {
             wordReplacementsWindowController = controller
         }
 
+        controller.present()
+    }
+
+    private func openDictationActions() {
+        if popover.isShown { popover.performClose(nil) }
+
+        let controller: DictationActionsWindowController
+        if let existing = dictationActionsWindowController {
+            controller = existing
+        } else {
+            controller = DictationActionsWindowController(
+                settingsStore: dependencies.settingsStore,
+                dictationStore: dependencies.dictationStore,
+                modelDiscoverer: dependencies.codexClient
+            )
+            dictationActionsWindowController = controller
+        }
         controller.present()
     }
 

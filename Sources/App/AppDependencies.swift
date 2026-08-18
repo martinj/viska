@@ -54,6 +54,7 @@ final class AppDependencies {
             overlayController: recordingOverlayController,
             codexStatusMonitor: codexStatusMonitor,
             transcriptionClient: transcriptionClient,
+            textProcessor: codexClient,
             textInsertionService: textInsertionService,
             clipboardService: clipboardService,
             initialState: .unavailable(

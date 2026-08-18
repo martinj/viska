@@ -109,6 +109,136 @@ final class GlobalHotkeyServiceTests: XCTestCase {
         }
     }
 
+    func testPlainAndActionShortcutsEmitTheirOwnRoutes() async throws {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        let plain = HotkeyDescriptor(keyCode: 1, modifiers: HotkeyDescriptor.requiredModifierFlags)
+        let action = makeAction(keyCode: 2)
+        let actionHotkey = try XCTUnwrap(action.hotkey)
+        var events: [GlobalHotkeyService.Event] = []
+        service.onEvent = { events.append($0) }
+
+        try service.configure(
+            registrations: [
+                DictationHotkeyRegistration(descriptor: plain, route: .plain),
+                DictationHotkeyRegistration(descriptor: actionHotkey, route: .action(action)),
+            ],
+            mode: .holdToRecord
+        )
+        registrar.send(.pressed, for: plain)
+        registrar.send(.released, for: plain)
+        registrar.send(.pressed, for: actionHotkey)
+        registrar.send(.released, for: actionHotkey)
+
+        await waitForEventCount(4) { events.count }
+        XCTAssertEqual(events, [
+            .pressed(route: .plain),
+            .released(route: .plain),
+            .pressed(route: .action(action)),
+            .released(route: .action(action)),
+        ])
+    }
+
+    func testToggleModeAppliesToEveryRoute() async throws {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        let action = makeAction(keyCode: 2)
+        let actionHotkey = try XCTUnwrap(action.hotkey)
+        var events: [GlobalHotkeyService.Event] = []
+        service.onEvent = { events.append($0) }
+
+        try service.configure(
+            registrations: [DictationHotkeyRegistration(descriptor: actionHotkey, route: .action(action))],
+            mode: .toggleToRecord
+        )
+        registrar.send(.pressed, for: actionHotkey)
+        registrar.send(.released, for: actionHotkey)
+
+        await waitForEventCount(1) { events.count }
+        XCTAssertEqual(events, [.toggle(route: .action(action))])
+    }
+
+    func testDuplicateShortcutsAreRejectedBeforeRegistration() {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        let descriptor = HotkeyDescriptor(keyCode: 1, modifiers: HotkeyDescriptor.requiredModifierFlags)
+
+        XCTAssertThrowsError(
+            try service.configure(
+                registrations: [
+                    DictationHotkeyRegistration(descriptor: descriptor, route: .plain),
+                    DictationHotkeyRegistration(descriptor: descriptor, route: .action(makeAction(keyCode: 1))),
+                ],
+                mode: .holdToRecord
+            )
+        )
+        XCTAssertEqual(registrar.registeredDescriptors, [])
+    }
+
+    func testFailedReconfigurationPreservesPreviousRegistrations() async throws {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        let plain = HotkeyDescriptor(keyCode: 1, modifiers: HotkeyDescriptor.requiredModifierFlags)
+        let conflicting = HotkeyDescriptor(keyCode: 2, modifiers: HotkeyDescriptor.requiredModifierFlags)
+        var events: [GlobalHotkeyService.Event] = []
+        service.onEvent = { events.append($0) }
+        try service.configure(
+            registrations: [DictationHotkeyRegistration(descriptor: plain, route: .plain)],
+            mode: .holdToRecord
+        )
+        registrar.failingDescriptors = [conflicting]
+
+        XCTAssertThrowsError(
+            try service.configure(
+                registrations: [
+                    DictationHotkeyRegistration(descriptor: plain, route: .plain),
+                    DictationHotkeyRegistration(descriptor: conflicting, route: .action(makeAction(keyCode: 2))),
+                ],
+                mode: .toggleToRecord
+            )
+        )
+        registrar.send(.pressed, for: plain)
+
+        await waitForEventCount(1) { events.count }
+        XCTAssertEqual(events, [.pressed(route: .plain)])
+        XCTAssertFalse(try XCTUnwrap(registrar.registrations[plain]).isInvalidated)
+    }
+
+    func testRemovingActionUnregistersOnlyItsShortcut() throws {
+        let registrar = FakeGlobalHotkeyRegistrar()
+        let service = GlobalHotkeyService(registrar: registrar)
+        let plain = HotkeyDescriptor(keyCode: 1, modifiers: HotkeyDescriptor.requiredModifierFlags)
+        let action = makeAction(keyCode: 2)
+        let actionHotkey = try XCTUnwrap(action.hotkey)
+        try service.configure(
+            registrations: [
+                DictationHotkeyRegistration(descriptor: plain, route: .plain),
+                DictationHotkeyRegistration(descriptor: actionHotkey, route: .action(action)),
+            ],
+            mode: .holdToRecord
+        )
+        let plainRegistration = try XCTUnwrap(registrar.registrations[plain])
+        let actionRegistration = try XCTUnwrap(registrar.registrations[actionHotkey])
+
+        try service.configure(
+            registrations: [DictationHotkeyRegistration(descriptor: plain, route: .plain)],
+            mode: .holdToRecord
+        )
+
+        XCTAssertFalse(plainRegistration.isInvalidated)
+        XCTAssertTrue(actionRegistration.isInvalidated)
+    }
+
+    private func makeAction(keyCode: UInt32) -> DictationAction {
+        DictationAction(
+            id: UUID(),
+            name: "Action",
+            hotkey: HotkeyDescriptor(keyCode: keyCode, modifiers: HotkeyDescriptor.requiredModifierFlags),
+            model: "gpt-5.6-luna",
+            prompt: "Transform."
+        )
+    }
+
     private func waitForEventCount(
         _ expectedCount: Int,
         currentCount: () -> Int,
@@ -150,19 +280,35 @@ final class GlobalHotkeyServiceTests: XCTestCase {
 
 private final class FakeGlobalHotkeyRegistrar: GlobalHotkeyRegistering {
     var error: GlobalHotkeyRegistrarError?
+    var failingDescriptors: Set<HotkeyDescriptor> = []
+    private(set) var handlers: [HotkeyDescriptor: (GlobalHotkeyService.RawEvent) -> Void] = [:]
+    private(set) var registrations: [HotkeyDescriptor: FakeGlobalHotkeyRegistration] = [:]
+
+    var registeredDescriptors: [HotkeyDescriptor] { Array(registrations.keys) }
 
     func register(
         descriptor: HotkeyDescriptor,
         handler: @escaping (GlobalHotkeyService.RawEvent) -> Void
     ) throws -> any GlobalHotkeyRegistration {
+        if failingDescriptors.contains(descriptor) {
+            throw GlobalHotkeyRegistrarError.conflict
+        }
         if let error {
             throw error
         }
+        let registration = FakeGlobalHotkeyRegistration()
+        handlers[descriptor] = handler
+        registrations[descriptor] = registration
+        return registration
+    }
 
-        return FakeGlobalHotkeyRegistration()
+    func send(_ event: GlobalHotkeyService.RawEvent, for descriptor: HotkeyDescriptor) {
+        guard registrations[descriptor]?.isInvalidated == false else { return }
+        handlers[descriptor]?(event)
     }
 }
 
-private struct FakeGlobalHotkeyRegistration: GlobalHotkeyRegistration {
-    func invalidate() {}
+private final class FakeGlobalHotkeyRegistration: GlobalHotkeyRegistration {
+    private(set) var isInvalidated = false
+    func invalidate() { isInvalidated = true }
 }

@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 
-struct HotkeyDescriptor: Codable, Equatable {
+struct HotkeyDescriptor: Codable, Equatable, Hashable, Sendable {
     enum ValidationError: Error, Equatable {
         case missingModifier
         case unsupportedKey

@@ -20,15 +20,18 @@ struct AppPreferences: Codable, Equatable {
     var recordingMode: RecordingMode
     var hotkey: HotkeyDescriptor
     var wordReplacements: [WordReplacement]
+    var dictationActions: [DictationAction]
 
     init(
         recordingMode: RecordingMode,
         hotkey: HotkeyDescriptor,
-        wordReplacements: [WordReplacement]
+        wordReplacements: [WordReplacement],
+        dictationActions: [DictationAction] = []
     ) {
         self.recordingMode = recordingMode
         self.hotkey = hotkey
         self.wordReplacements = wordReplacements
+        self.dictationActions = dictationActions
     }
 
     init(from decoder: any Decoder) throws {
@@ -36,6 +39,50 @@ struct AppPreferences: Codable, Equatable {
         recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
         hotkey = try container.decode(HotkeyDescriptor.self, forKey: .hotkey)
         wordReplacements = try container.decodeIfPresent([WordReplacement].self, forKey: .wordReplacements) ?? []
+        dictationActions = try container.decodeIfPresent([DictationAction].self, forKey: .dictationActions) ?? []
+
+        do {
+            try validateDictationActions()
+        } catch {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: error.localizedDescription)
+            )
+        }
+    }
+
+    func sanitizedAndValidated(actions: [DictationAction]) throws -> AppPreferences {
+        var updated = self
+        updated.dictationActions = actions.map { $0.sanitized() }
+        try updated.validateDictationActions()
+        return updated
+    }
+
+    func validateDictationActions() throws {
+        var ids = Set<UUID>()
+        var shortcuts: Set<HotkeyDescriptor> = [hotkey]
+
+        for action in dictationActions {
+            let sanitized = action.sanitized()
+            guard !sanitized.name.isEmpty else { throw DictationActionValidationError.missingName }
+            guard !sanitized.model.isEmpty else { throw DictationActionValidationError.missingModel }
+            guard !sanitized.prompt.isEmpty else { throw DictationActionValidationError.missingPrompt }
+
+            guard ids.insert(sanitized.id).inserted else {
+                throw DictationActionValidationError.duplicateID
+            }
+
+            if let hotkey = sanitized.hotkey {
+                do {
+                    try hotkey.validate()
+                } catch let error as HotkeyDescriptor.ValidationError {
+                    throw DictationActionValidationError.invalidHotkey(error)
+                }
+
+                guard shortcuts.insert(hotkey).inserted else {
+                    throw DictationActionValidationError.duplicateShortcut
+                }
+            }
+        }
     }
 
     static let `default` = AppPreferences(
@@ -44,6 +91,7 @@ struct AppPreferences: Codable, Equatable {
             keyCode: UInt32(49),
             modifiers: HotkeyDescriptor.requiredModifierFlags
         ),
-        wordReplacements: []
+        wordReplacements: [],
+        dictationActions: []
     )
 }

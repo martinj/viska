@@ -21,7 +21,12 @@ protocol GlobalHotkeyRegistering {
 @MainActor
 protocol GlobalHotkeyControlling: AnyObject {
     var onEvent: ((GlobalHotkeyService.Event) -> Void)? { get set }
-    func configure(descriptor: HotkeyDescriptor, mode: RecordingMode) throws
+    func configure(registrations: [DictationHotkeyRegistration], mode: RecordingMode) throws
+}
+
+struct DictationHotkeyRegistration: Equatable {
+    let descriptor: HotkeyDescriptor
+    let route: DictationRoute
 }
 
 @MainActor
@@ -31,11 +36,25 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         case released
     }
 
-    enum Event: Equatable {
-        case pressed
-        case released
-        case toggle
-        case cancel
+    struct Event: Equatable {
+        enum Kind: Equatable {
+            case pressed
+            case released
+            case toggle
+            case cancel
+        }
+
+        let kind: Kind
+        let route: DictationRoute?
+
+        static let pressed = Event(kind: .pressed, route: .plain)
+        static let released = Event(kind: .released, route: .plain)
+        static let toggle = Event(kind: .toggle, route: .plain)
+        static let cancel = Event(kind: .cancel, route: nil)
+
+        static func pressed(route: DictationRoute) -> Event { Event(kind: .pressed, route: route) }
+        static func released(route: DictationRoute) -> Event { Event(kind: .released, route: route) }
+        static func toggle(route: DictationRoute) -> Event { Event(kind: .toggle, route: route) }
     }
 
     enum Error: Swift.Error, Equatable {
@@ -47,7 +66,8 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
     var onEvent: ((Event) -> Void)?
 
     private let registrar: any GlobalHotkeyRegistering
-    private var registration: (any GlobalHotkeyRegistration)?
+    private var registrations: [HotkeyDescriptor: any GlobalHotkeyRegistration] = [:]
+    private var routesByDescriptor: [HotkeyDescriptor: DictationRoute] = [:]
     private var recordingMode: RecordingMode = .holdToRecord
     private var localEscapeMonitor: Any?
     private var globalEscapeMonitor: Any?
@@ -57,21 +77,33 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         installEscapeMonitorsIfNeeded()
     }
 
-    func configure(descriptor: HotkeyDescriptor, mode: RecordingMode) throws {
-        do {
-            try descriptor.validate()
-        } catch let error as HotkeyDescriptor.ValidationError {
-            throw Error.invalidDescriptor(error)
+    func configure(registrations requested: [DictationHotkeyRegistration], mode: RecordingMode) throws {
+        var descriptors = Set<HotkeyDescriptor>()
+        for requestedRegistration in requested {
+            do {
+                try requestedRegistration.descriptor.validate()
+            } catch let error as HotkeyDescriptor.ValidationError {
+                throw Error.invalidDescriptor(error)
+            }
+
+            guard descriptors.insert(requestedRegistration.descriptor).inserted else {
+                throw Error.registrationConflict
+            }
         }
 
+        let requestedDescriptors = Set(requested.map(\.descriptor))
+        let descriptorsToAdd = requestedDescriptors.subtracting(registrations.keys)
+        var additions: [HotkeyDescriptor: any GlobalHotkeyRegistration] = [:]
+
         do {
-            registration?.invalidate()
-            registration = try registrar.register(
-                descriptor: descriptor,
-                handler: makeRawEventHandler()
-            )
-            recordingMode = mode
+            for descriptor in descriptorsToAdd {
+                additions[descriptor] = try registrar.register(
+                    descriptor: descriptor,
+                    handler: makeRawEventHandler(descriptor: descriptor)
+                )
+            }
         } catch let error as GlobalHotkeyRegistrarError {
+            additions.values.forEach { $0.invalidate() }
             switch error {
             case .conflict:
                 throw Error.registrationConflict
@@ -79,11 +111,34 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
                 throw Error.registrationFailed(status)
             }
         }
+
+        for descriptor in Set(registrations.keys).subtracting(requestedDescriptors) {
+            registrations.removeValue(forKey: descriptor)?.invalidate()
+        }
+        registrations.merge(additions) { current, _ in current }
+        routesByDescriptor = Dictionary(
+            uniqueKeysWithValues: requested.map { ($0.descriptor, $0.route) }
+        )
+        recordingMode = mode
+    }
+
+    func configure(descriptor: HotkeyDescriptor, mode: RecordingMode) throws {
+        try configure(
+            registrations: [DictationHotkeyRegistration(descriptor: descriptor, route: .plain)],
+            mode: mode
+        )
+    }
+
+    nonisolated func handle(rawEvent: RawEvent, descriptor: HotkeyDescriptor) {
+        runOnMainActor { service in
+            service.handleRawEventOnMainActor(rawEvent, descriptor: descriptor)
+        }
     }
 
     nonisolated func handle(rawEvent: RawEvent) {
         runOnMainActor { service in
-            service.handleRawEventOnMainActor(rawEvent)
+            guard let descriptor = service.routesByDescriptor.keys.first else { return }
+            service.handleRawEventOnMainActor(rawEvent, descriptor: descriptor)
         }
     }
 
@@ -93,14 +148,16 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         }
     }
 
-    private func handleRawEventOnMainActor(_ rawEvent: RawEvent) {
+    private func handleRawEventOnMainActor(_ rawEvent: RawEvent, descriptor: HotkeyDescriptor) {
+        guard let route = routesByDescriptor[descriptor] else { return }
+
         switch (recordingMode, rawEvent) {
         case (.holdToRecord, .pressed):
-            onEvent?(.pressed)
+            onEvent?(.pressed(route: route))
         case (.holdToRecord, .released):
-            onEvent?(.released)
+            onEvent?(.released(route: route))
         case (.toggleToRecord, .pressed):
-            onEvent?(.toggle)
+            onEvent?(.toggle(route: route))
         case (.toggleToRecord, .released):
             break
         }
@@ -129,9 +186,9 @@ final class GlobalHotkeyService: GlobalHotkeyControlling {
         )
     }
 
-    nonisolated func makeRawEventHandler() -> (RawEvent) -> Void {
+    nonisolated func makeRawEventHandler(descriptor: HotkeyDescriptor) -> (RawEvent) -> Void {
         { [weak self] rawEvent in
-            self?.handle(rawEvent: rawEvent)
+            self?.handle(rawEvent: rawEvent, descriptor: descriptor)
         }
     }
 

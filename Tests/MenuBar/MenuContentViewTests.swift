@@ -20,4 +20,10 @@ final class MenuContentViewTests: XCTestCase {
 
         XCTAssertEqual(messageSize.height, baseSize.height + 56)
     }
+
+    func testDictationActionCountLabelsAreVisible() {
+        XCTAssertEqual(MenuContentView.actionCountLabel(0), "No actions yet")
+        XCTAssertEqual(MenuContentView.actionCountLabel(1), "1 action")
+        XCTAssertEqual(MenuContentView.actionCountLabel(3), "3 actions")
+    }
 }

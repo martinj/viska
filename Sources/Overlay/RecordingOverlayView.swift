@@ -5,6 +5,8 @@ final class RecordingOverlayModel: ObservableObject {
     enum Phase {
         case recording
         case transcribing
+        case processing(actionName: String)
+        case inserting
     }
 
     @Published var levels: [CGFloat] = [CGFloat](repeating: 0, count: AudioLevelAnalyzer.bandCount)
@@ -16,8 +18,8 @@ struct RecordingOverlayView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: model.phase == .recording ? "mic.fill" : "waveform")
-                .foregroundStyle(model.phase == .recording ? .white.opacity(0.7) : transcribingColor)
+            Image(systemName: phaseIcon)
+                .foregroundStyle(isRecording ? .white.opacity(0.7) : progressColor)
                 .font(.system(size: 14, weight: .medium))
 
             switch model.phase {
@@ -30,9 +32,17 @@ struct RecordingOverlayView: View {
                 .frame(height: 28)
 
             case .transcribing:
-                Text("Transcribing…")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(transcribingColor)
+                progressText("Transcribing…")
+            case .processing(let actionName):
+                VStack(alignment: .leading, spacing: 1) {
+                    progressText("Processing…")
+                    Text(actionName)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+            case .inserting:
+                progressText("Inserting…")
             }
         }
         .padding(.leading, 16)
@@ -47,11 +57,31 @@ struct RecordingOverlayView: View {
                 )
         )
         .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
-        .animation(.easeInOut(duration: 0.2), value: model.phase == .transcribing)
+        .animation(.easeInOut(duration: 0.2), value: isRecording)
     }
 
-    private var transcribingColor: Color {
+    private var progressColor: Color {
         Color(red: 0.4, green: 0.7, blue: 1.0)
+    }
+
+    private var isRecording: Bool {
+        if case .recording = model.phase { return true }
+        return false
+    }
+
+    private var phaseIcon: String {
+        switch model.phase {
+        case .recording: "mic.fill"
+        case .transcribing: "waveform"
+        case .processing: "sparkles"
+        case .inserting: "text.cursor"
+        }
+    }
+
+    private func progressText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(progressColor)
     }
 }
 

@@ -31,6 +31,14 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
+    func updateDictationActions(_ dictationActions: [DictationAction]) throws {
+        let updated = try preferences.sanitizedAndValidated(actions: dictationActions)
+        guard preferences != updated else { return }
+
+        preferences = updated
+        persist()
+    }
+
     func updateWordReplacements(_ wordReplacements: [WordReplacement]) {
         let sanitizedWordReplacements = Self.sanitize(wordReplacements)
         guard preferences.wordReplacements != sanitizedWordReplacements else { return }

@@ -6,6 +6,8 @@ protocol RecordingOverlayControlling: AnyObject {
     func show()
     func update(levels: [Float])
     func showTranscribing()
+    func showProcessing(actionName: String)
+    func showInserting()
     func hide()
 }
 
@@ -62,6 +64,14 @@ final class RecordingOverlayWindowController: NSWindowController, RecordingOverl
 
     func showTranscribing() {
         model.phase = .transcribing
+    }
+
+    func showProcessing(actionName: String) {
+        model.phase = .processing(actionName: actionName)
+    }
+
+    func showInserting() {
+        model.phase = .inserting
     }
 
     func hide() {
