@@ -11,7 +11,8 @@ final class TextInsertionServiceTests: XCTestCase {
             pasteResult: false
         )
 
-        let outcome = await service.insert("Martin")
+        let destination = service.captureDestination()
+        let outcome = await service.insert("Martin", at: destination)
 
         XCTAssertEqual(outcome, .insertedDirectly)
         XCTAssertEqual(element.value, "Hello Martin")
@@ -28,7 +29,8 @@ final class TextInsertionServiceTests: XCTestCase {
             pasteResult: true
         )
 
-        let outcome = await service.insert("Martin")
+        let destination = service.captureDestination()
+        let outcome = await service.insert("Martin", at: destination)
 
         XCTAssertEqual(outcome, .insertedViaPaste)
         XCTAssertEqual(clipboard.value, "Martin")
@@ -44,7 +46,8 @@ final class TextInsertionServiceTests: XCTestCase {
             pasteResult: false
         )
 
-        let outcome = await service.insert("Martin")
+        let destination = service.captureDestination()
+        let outcome = await service.insert("Martin", at: destination)
 
         XCTAssertEqual(outcome, .clipboardFallback(reason: .accessibilityDenied))
         XCTAssertEqual(clipboard.value, "Martin")
@@ -52,22 +55,62 @@ final class TextInsertionServiceTests: XCTestCase {
 
     func testRequestsAccessibilityAndPastesWhenPromptSucceeds() async {
         let clipboard = FakeClipboardService()
+        let element = FakeFocusedTextElement(
+            value: nil,
+            selectedRange: nil,
+            isWritable: false
+        )
         let permissions = FakePermissionCoordinator(
             accessibilityStatus: .denied,
             accessibilityPromptResult: true
         )
         let service = makeService(
             permissionCoordinator: permissions,
-            element: nil,
+            element: element,
             clipboard: clipboard,
             pasteResult: true
         )
 
-        let outcome = await service.insert("Martin")
+        let destination = service.captureDestination()
+        let outcome = await service.insert("Martin", at: destination)
 
         XCTAssertEqual(outcome, .insertedViaPaste)
         XCTAssertEqual(clipboard.value, "Martin")
         XCTAssertEqual(permissions.requestedAccessibilityPrompts, [true])
+    }
+
+    func testFocusChangeWithinCapturedAppPastesIntoCurrentFocus() async {
+        let capturedElement = FakeFocusedTextElement(
+            value: nil,
+            selectedRange: nil,
+            isWritable: false
+        )
+        let currentElement = FakeFocusedTextElement(
+            value: nil,
+            selectedRange: nil,
+            isWritable: false
+        )
+        let resolver = FakeFocusedElementResolver(element: capturedElement)
+        let clipboard = FakeClipboardService()
+        let pasteService = FakeSyntheticPasteService(result: true)
+        let service = makeService(
+            permissionCoordinator: FakePermissionCoordinator(
+                accessibilityStatus: .granted,
+                accessibilityPromptResult: true
+            ),
+            resolver: resolver,
+            clipboard: clipboard,
+            pasteService: pasteService,
+            pidProvider: FakeFrontmostApplicationPIDProvider(pid: 42)
+        )
+
+        let destination = service.captureDestination()
+        resolver.element = currentElement
+        let outcome = await service.insert("Martin", at: destination)
+
+        XCTAssertEqual(outcome, .insertedViaPaste)
+        XCTAssertEqual(clipboard.value, "Martin")
+        XCTAssertEqual(pasteService.pasteCallCount, 1)
     }
 
     func testDirectInsertFailureFallsThroughToPaste() async {
@@ -85,11 +128,97 @@ final class TextInsertionServiceTests: XCTestCase {
             pasteResult: true
         )
 
-        let outcome = await service.insert("Martin")
+        let destination = service.captureDestination()
+        let outcome = await service.insert("Martin", at: destination)
 
         XCTAssertEqual(outcome, .insertedViaPaste)
         XCTAssertEqual(clipboard.value, "Martin")
         XCTAssertEqual(element.value, "Hello world")
+    }
+
+    func testCapturedElementReceivesTranscriptAfterFocusChanges() async {
+        let capturedElement = FakeFocusedTextElement(
+            value: "Original",
+            selectedRange: NSRange(location: 8, length: 0),
+            isWritable: true
+        )
+        let newlyFocusedElement = FakeFocusedTextElement(
+            value: "Other",
+            selectedRange: NSRange(location: 5, length: 0),
+            isWritable: true
+        )
+        let resolver = FakeFocusedElementResolver(element: capturedElement)
+        let clipboard = FakeClipboardService()
+        let pasteService = FakeSyntheticPasteService(result: true)
+        let pidProvider = FakeFrontmostApplicationPIDProvider(pid: 42)
+        let service = makeService(
+            permissionCoordinator: FakePermissionCoordinator(
+                accessibilityStatus: .granted,
+                accessibilityPromptResult: true
+            ),
+            resolver: resolver,
+            clipboard: clipboard,
+            pasteService: pasteService,
+            pidProvider: pidProvider
+        )
+
+        let destination = service.captureDestination()
+        resolver.element = newlyFocusedElement
+        pidProvider.pid = 84
+        let outcome = await service.insert(" transcript", at: destination)
+
+        XCTAssertEqual(outcome, .insertedDirectly)
+        XCTAssertEqual(capturedElement.value, "Original transcript")
+        XCTAssertEqual(newlyFocusedElement.value, "Other")
+        XCTAssertNil(clipboard.value)
+        XCTAssertEqual(pasteService.pasteCallCount, 0)
+    }
+
+    func testAppChangeFallsBackToClipboardWithoutSyntheticPaste() async {
+        let clipboard = FakeClipboardService()
+        let pasteService = FakeSyntheticPasteService(result: true)
+        let pidProvider = FakeFrontmostApplicationPIDProvider(pid: 42)
+        let service = makeService(
+            element: nil,
+            clipboard: clipboard,
+            pasteService: pasteService,
+            pidProvider: pidProvider
+        )
+
+        let destination = service.captureDestination()
+        pidProvider.pid = 84
+        let outcome = await service.insert("Martin", at: destination)
+
+        XCTAssertEqual(outcome, .clipboardFallback(reason: .frontmostApplicationChanged))
+        XCTAssertEqual(clipboard.value, "Martin")
+        XCTAssertEqual(pasteService.pasteCallCount, 0)
+    }
+
+    func testAppChangeDuringCaptureMakesPasteFallbackUnsafe() async {
+        let clipboard = FakeClipboardService()
+        let pasteService = FakeSyntheticPasteService(result: true)
+        let pidProvider = FakeFrontmostApplicationPIDProvider(pid: 42)
+        let resolver = FakeFocusedElementResolver(element: nil) {
+            pidProvider.pid = 84
+        }
+        let service = makeService(
+            permissionCoordinator: FakePermissionCoordinator(
+                accessibilityStatus: .granted,
+                accessibilityPromptResult: true
+            ),
+            resolver: resolver,
+            clipboard: clipboard,
+            pasteService: pasteService,
+            pidProvider: pidProvider
+        )
+
+        let destination = service.captureDestination()
+        pidProvider.pid = 42
+        let outcome = await service.insert("Martin", at: destination)
+
+        XCTAssertEqual(outcome, .clipboardFallback(reason: .frontmostApplicationChanged))
+        XCTAssertEqual(clipboard.value, "Martin")
+        XCTAssertEqual(pasteService.pasteCallCount, 0)
     }
 
     private func makeService(
@@ -118,11 +247,66 @@ final class TextInsertionServiceTests: XCTestCase {
         clipboard: FakeClipboardService = FakeClipboardService(),
         pasteResult: Bool
     ) -> TextInsertionService {
+        makeService(
+            permissionCoordinator: permissionCoordinator,
+            resolver: FakeFocusedElementResolver(element: element),
+            clipboard: clipboard,
+            pasteService: FakeSyntheticPasteService(result: pasteResult),
+            pidProvider: FakeFrontmostApplicationPIDProvider(pid: 42)
+        )
+    }
+
+    private func makeService(
+        accessibilityStatus: PermissionStatus = .granted,
+        resolver: FakeFocusedElementResolver,
+        clipboard: FakeClipboardService = FakeClipboardService(),
+        pasteResult: Bool,
+        pidProvider: FakeFrontmostApplicationPIDProvider = FakeFrontmostApplicationPIDProvider(pid: 42)
+    ) -> TextInsertionService {
+        makeService(
+            permissionCoordinator: FakePermissionCoordinator(
+                accessibilityStatus: accessibilityStatus,
+                accessibilityPromptResult: accessibilityStatus == .granted
+            ),
+            resolver: resolver,
+            clipboard: clipboard,
+            pasteService: FakeSyntheticPasteService(result: pasteResult),
+            pidProvider: pidProvider
+        )
+    }
+
+    private func makeService(
+        accessibilityStatus: PermissionStatus = .granted,
+        element: FakeFocusedTextElement?,
+        clipboard: FakeClipboardService = FakeClipboardService(),
+        pasteService: FakeSyntheticPasteService,
+        pidProvider: FakeFrontmostApplicationPIDProvider
+    ) -> TextInsertionService {
+        makeService(
+            permissionCoordinator: FakePermissionCoordinator(
+                accessibilityStatus: accessibilityStatus,
+                accessibilityPromptResult: accessibilityStatus == .granted
+            ),
+            resolver: FakeFocusedElementResolver(element: element),
+            clipboard: clipboard,
+            pasteService: pasteService,
+            pidProvider: pidProvider
+        )
+    }
+
+    private func makeService(
+        permissionCoordinator: FakePermissionCoordinator,
+        resolver: FakeFocusedElementResolver,
+        clipboard: FakeClipboardService,
+        pasteService: FakeSyntheticPasteService,
+        pidProvider: FakeFrontmostApplicationPIDProvider
+    ) -> TextInsertionService {
         TextInsertionService(
             permissionCoordinator: permissionCoordinator,
-            focusedElementResolver: FakeFocusedElementResolver(element: element),
+            focusedElementResolver: resolver,
+            frontmostApplicationPIDProvider: pidProvider,
             clipboardService: clipboard,
-            syntheticPasteService: FakeSyntheticPasteService(result: pasteResult)
+            syntheticPasteService: pasteService
         )
     }
 }
@@ -162,15 +346,19 @@ private final class FakeFocusedTextElement: FocusedTextElement {
     }
 }
 
+@MainActor
 private final class FakeFocusedElementResolver: FocusedElementResolving {
-    let element: FakeFocusedTextElement?
+    var element: FakeFocusedTextElement?
+    private let onResolve: () -> Void
 
-    init(element: FakeFocusedTextElement?) {
+    init(element: FakeFocusedTextElement?, onResolve: @escaping () -> Void = {}) {
         self.element = element
+        self.onResolve = onResolve
     }
 
     func focusedElement() -> (any FocusedTextElement)? {
-        element
+        onResolve()
+        return element
     }
 }
 
@@ -190,13 +378,28 @@ private final class FakeClipboardService: ClipboardControlling {
 @MainActor
 private final class FakeSyntheticPasteService: SyntheticPasting {
     let result: Bool
+    private(set) var pasteCallCount = 0
 
     init(result: Bool) {
         self.result = result
     }
 
     func pasteClipboardContents() -> Bool {
-        result
+        pasteCallCount += 1
+        return result
+    }
+}
+
+@MainActor
+private final class FakeFrontmostApplicationPIDProvider: FrontmostApplicationPIDProviding {
+    var pid: pid_t?
+
+    init(pid: pid_t?) {
+        self.pid = pid
+    }
+
+    func frontmostApplicationPID() -> pid_t? {
+        pid
     }
 }
 

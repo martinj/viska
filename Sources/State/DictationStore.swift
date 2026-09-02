@@ -31,9 +31,27 @@ final class DictationStore: ObservableObject {
     @Published private(set) var recentActionFeedback: RecentActionFeedback?
 
     private struct RecordingContext {
+        let id: UUID
         let route: DictationRoute
         let mode: RecordingMode
         let wordReplacements: [WordReplacement]
+        let insertionDestination: TextInsertionDestination?
+        let pickerActions: [DictationAction]
+    }
+
+    private final class PickerSession {
+        let contextID: UUID
+        let actions: [DictationAction]
+        var transcript: String?
+        var choice: PickerChoice?
+        var sourceStored = false
+        var controlErrorMessage: String?
+        var errorMessage: String?
+
+        init(context: RecordingContext) {
+            contextID = context.id
+            actions = context.pickerActions
+        }
     }
 
     private enum ProcessingDestination: Equatable {
@@ -59,6 +77,9 @@ final class DictationStore: ObservableObject {
     private var pendingTranscriptionTask: Task<Void, Never>?
     private var recordingStartID: UUID?
     private var activeContext: RecordingContext?
+    private var pickerSession: PickerSession?
+    private var pickerControlsActive = false
+    private var hotkeyRestorationNeeded = false
     private var processingID: UUID?
     private var processingSourceText: String?
     private var processingDestination: ProcessingDestination?
@@ -166,6 +187,11 @@ final class DictationStore: ObservableObject {
         clearPermissionBlockerIfReady()
     }
 
+    func retryHotkeyConfigurationIfNeeded() {
+        guard hotkeyRestorationNeeded else { return }
+        restorePersistentHotkeysAfterPickerFailure()
+    }
+
     func requestMicrophonePermission() async {
         guard let permissionCoordinator else { return }
         refreshPermissionStatuses()
@@ -193,11 +219,13 @@ final class DictationStore: ObservableObject {
     func refreshCodexAvailability() async {
         guard let codexStatusMonitor else { return }
         let availability = await codexStatusMonitor.refresh()
-        guard case .recording = state else {
+        switch state {
+        case .idle, .failed, .unavailable:
             state = availability.isReady
                 ? .idle
                 : .unavailable(title: availability.title, message: availability.message)
-            return
+        case .recording, .transcribing, .choosing, .processing, .inserting:
+            break
         }
     }
 
@@ -207,6 +235,20 @@ final class DictationStore: ObservableObject {
             updated.hotkey = descriptor
             try updated.validateDictationActions()
             try applyHotkeyConfiguration(updated) { settingsStore.updateHotkey(descriptor) }
+            hotkeyErrorMessage = nil
+        } catch {
+            hotkeyErrorMessage = userMessage(for: error)
+        }
+    }
+
+    func updatePickerHotkey(_ descriptor: HotkeyDescriptor?) {
+        do {
+            var updated = settingsStore.preferences
+            updated.pickerHotkey = descriptor
+            try updated.validateDictationActions()
+            try applyHotkeyConfiguration(updated) {
+                try settingsStore.updatePickerHotkey(descriptor)
+            }
             hotkeyErrorMessage = nil
         } catch {
             hotkeyErrorMessage = userMessage(for: error)
@@ -248,6 +290,8 @@ final class DictationStore: ObservableObject {
                 return "That shortcut is already reserved by another app."
             case .registrationFailed(let status):
                 return "Unable to register the shortcut (OSStatus \(status))."
+            case .pickerSessionActive:
+                return "Wait for active dictation to finish before changing shortcuts."
             }
         }
         if let error = error as? HotkeyDescriptor.ValidationError {
@@ -257,18 +301,17 @@ final class DictationStore: ObservableObject {
     }
 
     func handleHotkeyEvent(_ event: GlobalHotkeyService.Event) {
-        switch event.kind {
-        case .pressed:
-            guard let route = event.route else { return }
+        switch event {
+        case .pressed(let route):
             startRecordingIfPossible(route: route)
-        case .released:
-            guard let route = event.route else { return }
+        case .released(let route):
             stopRecordingIfNeeded(route: route)
-        case .toggle:
-            guard let route = event.route else { return }
+        case .toggle(let route):
             toggleRecording(route: route)
         case .cancel:
             cancelActiveWorkIfNeeded()
+        case .pickerChoice(let choice):
+            handlePickerChoice(choice)
         }
     }
 
@@ -293,8 +336,12 @@ final class DictationStore: ObservableObject {
             return
         }
         guard case .recording = state, pendingStopTask == nil else { return }
-        state = .transcribing
-        overlayController?.showTranscribing()
+        if case .picker = route, let activeContext {
+            beginPickerSession(context: activeContext)
+        } else {
+            state = .transcribing
+            overlayController?.showTranscribing()
+        }
         pendingStopTask = Task { [weak self] in await self?.finishRecording() }
     }
 
@@ -309,14 +356,31 @@ final class DictationStore: ObservableObject {
             overlayController?.hide()
             switch destination {
             case .insertion:
-                lastTranscript = sourceText
-                appendHistoryItemIfNeeded(sourceText)
+                if !preservePickerSourceIfNeeded() {
+                    lastTranscript = sourceText
+                    appendHistoryItemIfNeeded(sourceText)
+                }
             case .clipboard:
                 recentActionFeedback = nil
             case nil:
                 break
             }
+            endPickerControlsIfNeeded()
+            pickerSession = nil
             activeContext = nil
+            state = .idle
+            return
+        }
+        if pickerSession != nil {
+            pendingStopTask?.cancel()
+            pendingStopTask = nil
+            pendingTranscriptionTask?.cancel()
+            pendingTranscriptionTask = nil
+            preservePickerSourceIfNeeded()
+            endPickerControlsIfNeeded()
+            pickerSession = nil
+            activeContext = nil
+            overlayController?.hide()
             state = .idle
             return
         }
@@ -340,24 +404,129 @@ final class DictationStore: ObservableObject {
             startRecordingIfPossible(route: route)
         case .recording:
             stopRecordingIfNeeded(route: route)
-        case .unavailable, .transcribing, .processing, .inserting:
+        case .unavailable, .transcribing, .choosing, .processing, .inserting:
             break
         }
+    }
+
+    private func beginPickerSession(context: RecordingContext) {
+        let session = PickerSession(context: context)
+        pickerSession = session
+        do {
+            try hotkeyService.beginPickerChoiceSession(actionCount: session.actions.count)
+            pickerControlsActive = true
+            state = .choosing
+            overlayController?.showChoosing(pickerPresentation(for: session))
+        } catch {
+            let message = userMessage(for: error)
+            hotkeyErrorMessage = message
+            session.controlErrorMessage = message
+            hotkeyRestorationNeeded = true
+            restorePersistentHotkeysAfterPickerFailure(preserving: message)
+            state = .transcribing
+            overlayController?.showTranscribing()
+        }
+    }
+
+    private func handlePickerChoice(_ choice: PickerChoice) {
+        guard let session = pickerSession, pickerControlsActive else { return }
+        if case .action(let index) = choice,
+           !session.actions.indices.contains(index) {
+            return
+        }
+
+        session.choice = choice
+        endPickerControlsIfNeeded()
+        if session.transcript == nil {
+            state = .transcribing
+            overlayController?.showTranscribing()
+        }
+        resolvePickerSessionIfReady()
+    }
+
+    private func resolvePickerSessionIfReady() {
+        guard let session = pickerSession,
+              let sourceText = session.transcript else {
+            return
+        }
+
+        if let controlErrorMessage = session.controlErrorMessage {
+            preservePickerSourceIfNeeded()
+            pickerSession = nil
+            activeContext = nil
+            overlayController?.hide()
+            setFailed(title: "Action Picker Unavailable", message: controlErrorMessage)
+            return
+        }
+
+        guard let choice = session.choice,
+              let context = activeContext,
+              context.id == session.contextID else {
+            state = .choosing
+            overlayController?.showChoosing(pickerPresentation(for: session))
+            return
+        }
+
+        switch choice {
+        case .keepAsIs:
+            let shouldStore = !session.sourceStored
+            pickerSession = nil
+            pendingTranscriptionTask = Task { [weak self] in
+                await self?.insertAndStore(
+                    sourceText,
+                    at: context.insertionDestination,
+                    appendHistory: shouldStore
+                )
+            }
+        case .action(let index):
+            guard session.actions.indices.contains(index) else { return }
+            let action = session.actions[index]
+            let operationID = beginProcessing(
+                sourceText: sourceText,
+                action: action,
+                destination: .insertion
+            )
+            pendingTranscriptionTask = Task { [weak self] in
+                await self?.performProcessing(
+                    operationID: operationID,
+                    sourceText: sourceText,
+                    action: action,
+                    destination: .insertion
+                )
+            }
+        }
+    }
+
+    private func pickerPresentation(for session: PickerSession) -> PickerPresentation {
+        PickerPresentation(
+            actionNames: session.actions.map(\.name),
+            transcriptPreview: session.transcript?.replacingOccurrences(of: "\n", with: " "),
+            errorMessage: session.errorMessage
+        )
     }
 
     private func transcribe(audio: RecordedAudio, client: any AudioTranscribing, context: RecordingContext) async {
         do {
             let result = try await client.transcribe(audio: audio)
+            guard !Task.isCancelled, activeContext?.id == context.id else { return }
             let sourceText = TranscriptReplacementEngine.apply(context.wordReplacements, to: result.text)
             switch context.route {
             case .plain:
-                await insertAndStore(sourceText)
+                await insertAndStore(sourceText, at: context.insertionDestination)
+            case .picker:
+                guard let session = pickerSession, session.contextID == context.id else { return }
+                session.transcript = sourceText
+                lastTranscript = sourceText
+                resolvePickerSessionIfReady()
             case .action(let action):
                 await process(sourceText: sourceText, action: action)
             }
         } catch is CancellationError {
             return
         } catch let error as TranscriptionClient.Error {
+            guard activeContext?.id == context.id else { return }
+            endPickerControlsIfNeeded()
+            pickerSession = nil
             overlayController?.hide()
             activeContext = nil
             switch error {
@@ -373,6 +542,9 @@ final class DictationStore: ObservableObject {
                 setFailed(title: "Transcription Failed", message: "Transcription request failed: \(message)")
             }
         } catch {
+            guard activeContext?.id == context.id else { return }
+            endPickerControlsIfNeeded()
+            pickerSession = nil
             overlayController?.hide()
             activeContext = nil
             setFailed(title: "Transcription Failed", message: "Transcription failed: \(error.localizedDescription)")
@@ -440,7 +612,10 @@ final class DictationStore: ObservableObject {
             pendingTranscriptionTask = nil
             switch destination {
             case .insertion:
-                await insertAndStore(processedText)
+                await insertAndStore(
+                    processedText,
+                    at: activeContext?.insertionDestination
+                )
             case .clipboard(let transcriptID):
                 clipboardService?.setString(processedText)
                 state = .idle
@@ -470,7 +645,11 @@ final class DictationStore: ObservableObject {
         pendingTranscriptionTask = nil
         switch destination {
         case .insertion:
-            failProcessing(sourceText: sourceText, message: message)
+            if pickerSession != nil {
+                recoverPickerAfterProcessingFailure(message: message)
+            } else {
+                failProcessing(sourceText: sourceText, message: message)
+            }
         case .clipboard(let transcriptID):
             recentActionFeedback = RecentActionFeedback(
                 transcriptID: transcriptID,
@@ -495,16 +674,29 @@ final class DictationStore: ObservableObject {
         }
     }
 
-    private func insertAndStore(_ text: String) async {
+    private func insertAndStore(
+        _ text: String,
+        at destination: TextInsertionDestination?,
+        appendHistory: Bool = true
+    ) async {
         lastTranscript = text
-        appendHistoryItemIfNeeded(text)
+        if appendHistory {
+            appendHistoryItemIfNeeded(text)
+        }
         state = .inserting
         overlayController?.showInserting()
-        if let textInsertionService { _ = await textInsertionService.insert(text) }
+        let insertionOutcome: TextInsertionOutcome?
+        if let textInsertionService, let destination {
+            insertionOutcome = await textInsertionService.insert(text, at: destination)
+        } else {
+            insertionOutcome = nil
+        }
         overlayController?.hide()
         refreshPermissionStatuses()
+        endPickerControlsIfNeeded()
+        pickerSession = nil
         activeContext = nil
-        state = .idle
+        state = insertionOutcome.flatMap(insertionFailureState(for:)) ?? .idle
     }
 
     private func failProcessing(sourceText: String, message: String) {
@@ -513,6 +705,29 @@ final class DictationStore: ObservableObject {
         appendHistoryItemIfNeeded(sourceText)
         activeContext = nil
         setFailed(title: "Processing Failed", message: message)
+    }
+
+    private func recoverPickerAfterProcessingFailure(message: String) {
+        guard let session = pickerSession else { return }
+        preservePickerSourceIfNeeded()
+        session.choice = nil
+        session.errorMessage = message
+
+        do {
+            try hotkeyService.beginPickerChoiceSession(actionCount: session.actions.count)
+            pickerControlsActive = true
+            state = .choosing
+            overlayController?.showChoosing(pickerPresentation(for: session))
+        } catch {
+            let controlMessage = userMessage(for: error)
+            hotkeyErrorMessage = controlMessage
+            hotkeyRestorationNeeded = true
+            restorePersistentHotkeysAfterPickerFailure(preserving: controlMessage)
+            pickerSession = nil
+            activeContext = nil
+            overlayController?.hide()
+            setFailed(title: "Action Picker Unavailable", message: controlMessage)
+        }
     }
 
     private func processingFailureMessage(for error: Swift.Error) -> String {
@@ -548,13 +763,72 @@ final class DictationStore: ObservableObject {
         transcriptionHistoryStore.save(transcriptionHistory)
     }
 
+    @discardableResult
+    private func preservePickerSourceIfNeeded() -> Bool {
+        guard let session = pickerSession,
+              let transcript = session.transcript,
+              !session.sourceStored else {
+            return false
+        }
+
+        lastTranscript = transcript
+        appendHistoryItemIfNeeded(transcript)
+        session.sourceStored = true
+        return true
+    }
+
+    private func endPickerControlsIfNeeded() {
+        guard pickerControlsActive else { return }
+        pickerControlsActive = false
+        do {
+            try hotkeyService.endPickerChoiceSession()
+        } catch {
+            hotkeyRestorationNeeded = true
+            restorePersistentHotkeysAfterPickerFailure()
+        }
+    }
+
+    private func restorePersistentHotkeysAfterPickerFailure(preserving message: String? = nil) {
+        do {
+            try hotkeyService.configure(
+                registrations: Self.registrations(for: settingsStore.preferences),
+                mode: settingsStore.preferences.recordingMode
+            )
+            hotkeyRestorationNeeded = false
+            hotkeyErrorMessage = message
+        } catch {
+            hotkeyErrorMessage = "Viska couldn't restore its global shortcuts. Open the menu to retry. \(userMessage(for: error))"
+        }
+    }
+
+    private func insertionFailureState(for outcome: TextInsertionOutcome) -> DictationState? {
+        guard case .clipboardFallback(let reason) = outcome else { return nil }
+        let reasonMessage = switch reason {
+        case .accessibilityDenied:
+            "Accessibility access is unavailable."
+        case .frontmostApplicationChanged:
+            "The active app changed during dictation."
+        case .pasteFailed:
+            "The target app did not accept the paste command."
+        }
+        return .failed(
+            title: "Copied to Clipboard",
+            message: "\(reasonMessage) Your result was copied to the clipboard instead."
+        )
+    }
+
     private func launchRecordingStart(route: DictationRoute) {
         let startID = UUID()
         let preferences = settingsStore.preferences
         let context = RecordingContext(
+            id: startID,
             route: route,
             mode: preferences.recordingMode,
-            wordReplacements: preferences.wordReplacements
+            wordReplacements: preferences.wordReplacements,
+            insertionDestination: textInsertionService?.captureDestination(),
+            pickerActions: route == .picker
+                ? Array(preferences.dictationActions.prefix(9))
+                : []
         )
         activeContext = context
         recordingStartID = startID
@@ -624,16 +898,22 @@ final class DictationStore: ObservableObject {
                     await self?.transcribe(audio: lastRecordedAudio, client: transcriptionClient, context: activeContext)
                 }
             } else {
+                endPickerControlsIfNeeded()
+                pickerSession = nil
                 overlayController?.hide()
                 activeContext = nil
                 state = .idle
             }
         } catch AudioCaptureEngine.Error.nothingCaptured {
+            endPickerControlsIfNeeded()
+            pickerSession = nil
             overlayController?.hide()
             lastRecordedAudio = nil
             activeContext = nil
             state = .idle
         } catch {
+            endPickerControlsIfNeeded()
+            pickerSession = nil
             overlayController?.hide()
             activeContext = nil
             setFailed(title: "Recording Failed", message: "Recording could not be finalized.")
@@ -672,7 +952,7 @@ final class DictationStore: ObservableObject {
         switch state {
         case .idle, .failed:
             true
-        case .unavailable, .recording, .transcribing, .processing, .inserting:
+        case .unavailable, .recording, .transcribing, .choosing, .processing, .inserting:
             false
         }
     }
@@ -708,6 +988,7 @@ final class DictationStore: ObservableObject {
         suppressPreferenceReconfiguration = true
         defer { suppressPreferenceReconfiguration = false }
         try persist()
+        hotkeyRestorationNeeded = false
     }
 
     private func configureHotkeys(using preferences: AppPreferences) {
@@ -717,6 +998,7 @@ final class DictationStore: ObservableObject {
     private func configureHotkeys(using configuration: HotkeyConfiguration) {
         do {
             try hotkeyService.configure(registrations: configuration.registrations, mode: configuration.recordingMode)
+            hotkeyRestorationNeeded = false
             hotkeyErrorMessage = nil
         } catch {
             hotkeyErrorMessage = userMessage(for: error)
@@ -725,6 +1007,9 @@ final class DictationStore: ObservableObject {
 
     private static func registrations(for preferences: AppPreferences) -> [DictationHotkeyRegistration] {
         [DictationHotkeyRegistration(descriptor: preferences.hotkey, route: .plain)]
+            + (preferences.pickerHotkey.map {
+                [DictationHotkeyRegistration(descriptor: $0, route: .picker)]
+            } ?? [])
             + preferences.dictationActions.compactMap { action in
                 guard let hotkey = action.hotkey else { return nil }
                 return DictationHotkeyRegistration(descriptor: hotkey, route: .action(action))
@@ -738,6 +1023,9 @@ private struct HotkeyConfiguration: Equatable {
 
     init(preferences: AppPreferences) {
         registrations = [DictationHotkeyRegistration(descriptor: preferences.hotkey, route: .plain)]
+            + (preferences.pickerHotkey.map {
+                [DictationHotkeyRegistration(descriptor: $0, route: .picker)]
+            } ?? [])
             + preferences.dictationActions.compactMap { action in
                 guard let hotkey = action.hotkey else { return nil }
                 return DictationHotkeyRegistration(descriptor: hotkey, route: .action(action))

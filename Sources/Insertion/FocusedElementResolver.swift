@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Foundation
 
 @MainActor
@@ -13,6 +14,11 @@ protocol FocusedTextElement: AnyObject {
 @MainActor
 protocol FocusedElementResolving: AnyObject {
     func focusedElement() -> (any FocusedTextElement)?
+}
+
+@MainActor
+protocol FrontmostApplicationPIDProviding: AnyObject {
+    func frontmostApplicationPID() -> pid_t?
 }
 
 @MainActor
@@ -34,6 +40,13 @@ final class FocusedElementResolver: FocusedElementResolving {
 
         let axElement = focusedElementReference as! AXUIElement
         return AXFocusedTextElement(element: axElement)
+    }
+}
+
+@MainActor
+final class WorkspaceFrontmostApplicationPIDProvider: FrontmostApplicationPIDProviding {
+    func frontmostApplicationPID() -> pid_t? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
     }
 }
 

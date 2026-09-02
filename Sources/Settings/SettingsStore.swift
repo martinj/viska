@@ -31,6 +31,16 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
+    func updatePickerHotkey(_ pickerHotkey: HotkeyDescriptor?) throws {
+        var updated = preferences
+        updated.pickerHotkey = pickerHotkey
+        try updated.validateDictationActions()
+        guard preferences != updated else { return }
+
+        preferences = updated
+        persist()
+    }
+
     func updateDictationActions(_ dictationActions: [DictationAction]) throws {
         let updated = try preferences.sanitizedAndValidated(actions: dictationActions)
         guard preferences != updated else { return }

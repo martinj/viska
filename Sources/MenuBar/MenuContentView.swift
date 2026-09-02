@@ -119,13 +119,28 @@ struct MenuContentView: View {
 
                 // Hotkey section
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Shortcut")
+                    Text("Shortcuts")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
 
+                    Text("Plain dictation")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+
                     HotkeyRecorderView(currentHotkey: settingsStore.preferences.hotkey) { descriptor in
                         dictationStore.updateHotkey(descriptor)
+                    }
+
+                    Text("Choose an action")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+
+                    HotkeyRecorderView(
+                        currentHotkey: settingsStore.preferences.pickerHotkey,
+                        onHotkeyClear: { dictationStore.updatePickerHotkey(nil) }
+                    ) { descriptor in
+                        dictationStore.updatePickerHotkey(descriptor)
                     }
                 }
 
@@ -271,9 +286,9 @@ struct MenuContentView: View {
         let auxiliaryHeight = (showsStatusDetail ? auxiliaryMessageHeight : 0)
             + (showsHotkeyError ? auxiliaryMessageHeight : 0)
         // Two 58-point management sections. Keep the empty-state constant in sync.
-        guard clampedCount > 0 else { return 506 + auxiliaryHeight }
+        guard clampedCount > 0 else { return 574 + auxiliaryHeight }
 
-        let baseHeight: CGFloat = 442
+        let baseHeight: CGFloat = 510
         let recentLabelHeight: CGFloat = 14
         let recentSpacing: CGFloat = 6
         let rowHeight: CGFloat = 52
@@ -358,7 +373,7 @@ struct MenuContentView: View {
             "checkmark.circle.fill"
         case .recording:
             "mic.circle.fill"
-        case .transcribing, .processing:
+        case .transcribing, .choosing, .processing:
             "waveform.and.magnifyingglass"
         case .inserting:
             "text.cursor"
@@ -373,7 +388,7 @@ struct MenuContentView: View {
             .green
         case .recording:
             .red
-        case .transcribing, .processing, .inserting:
+        case .transcribing, .choosing, .processing, .inserting:
             .blue
         }
     }
@@ -386,7 +401,7 @@ struct MenuContentView: View {
         switch state {
         case .unavailable, .failed:
             true
-        case .idle, .recording, .transcribing, .processing, .inserting:
+        case .idle, .recording, .transcribing, .choosing, .processing, .inserting:
             false
         }
     }
