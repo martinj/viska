@@ -14,7 +14,8 @@ Audio transcription uses ChatGPT, with the [Codex CLI](https://github.com/openai
 
 ## Features
 
-- **Global hotkey** — trigger dictation from any app (default: `⌃⌥Space`)
+- **Plain dictation shortcut** — trigger immediate dictation from any app (default: `⌃⌥Space`)
+- **Action picker shortcut** — optionally record, then choose the original transcript or one of up to nine actions
 - **Dictation Actions** — create named prompts for rewriting, translating, formatting, or otherwise transforming speech
 - **Per-action configuration** — choose an optional global shortcut, available Codex model, reasoning effort, and prompt
 - **Word Replacements** — correct recurring transcription mistakes and domain terms before insertion or action processing
@@ -69,6 +70,14 @@ On first launch, the app will request:
 
 Bound actions are available globally. An action without a shortcut remains saved and can still be applied to a Recent transcript.
 
+### Action picker
+
+1. Open the menu bar popover and set **Choose an action** under **Shortcuts**
+2. Use that shortcut to record normally
+3. As soon as recording stops, choose with `⌘Return` or `⌘1…9` while transcription continues
+
+`⌘Return` inserts the original transcript. `⌘1…9` applies the corresponding saved action, in list order. Press **Escape** to cancel. The picker temporarily suspends Viska's configured global shortcuts, then restores them immediately after a choice or cancellation.
+
 ### Recent transcripts
 
 - Select the copy button to copy the original transcript
@@ -82,11 +91,12 @@ Click the menu bar icon to change the recording mode, customize shortcuts, manag
 
 ```text
 Plain dictation:  record → transcribe → Word Replacements → insert
+Action picker:    record → choose + transcribe → optional Codex processing → insert
 Dictation Action: record → transcribe → Word Replacements → Codex processing → insert
 Recent recovery:  saved transcript → Dictation Action → clipboard
 ```
 
-The app communicates with a local Codex app-server process for ChatGPT authentication, model discovery, and Dictation Action processing. Each action runs in a fresh isolated turn using its configured model and reasoning effort. If processing fails or is cancelled, Viska preserves the source transcript in Recent instead of inserting it automatically.
+The app communicates with a local Codex app-server process for ChatGPT authentication, model discovery, and Dictation Action processing. Each action runs in a fresh isolated turn using its configured model and reasoning effort. The action picker accepts a choice before or after transcription finishes. If picker processing fails, Viska preserves the source transcript in Recent and returns to the picker so the original can still be inserted or another action selected.
 
 The Codex binary is located automatically from common install paths or `$PATH`.
 

@@ -88,6 +88,7 @@ final class StatusItemController: NSObject {
             return
         }
 
+        dependencies.dictationStore.retryHotkeyConfigurationIfNeeded()
         dependencies.dictationStore.refreshPermissionStatuses()
         updatePopoverContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)

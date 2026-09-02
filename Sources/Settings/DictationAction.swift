@@ -41,6 +41,7 @@ struct DictationAction: Codable, Equatable, Identifiable, Sendable {
 
 enum DictationRoute: Equatable, Sendable {
     case plain
+    case picker
     case action(DictationAction)
 
     var actionName: String? {
@@ -52,12 +53,21 @@ enum DictationRoute: Equatable, Sendable {
         switch (self, other) {
         case (.plain, .plain):
             true
+        case (.picker, .picker):
+            true
         case (.action(let lhs), .action(let rhs)):
             lhs.id == rhs.id
-        case (.plain, .action), (.action, .plain):
+        case (.plain, .picker), (.plain, .action),
+             (.picker, .plain), (.picker, .action),
+             (.action, .plain), (.action, .picker):
             false
         }
     }
+}
+
+enum PickerChoice: Equatable, Sendable {
+    case keepAsIs
+    case action(index: Int)
 }
 
 enum DictationActionValidationError: LocalizedError, Equatable {
@@ -81,7 +91,7 @@ enum DictationActionValidationError: LocalizedError, Equatable {
         case .duplicateID:
             "This action duplicates an existing action."
         case .duplicateShortcut:
-            "That shortcut is already used by plain dictation or another action."
+            "That shortcut is already used by plain dictation, the action picker, or another action."
         }
     }
 }

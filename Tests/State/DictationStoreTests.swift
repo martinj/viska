@@ -7,9 +7,9 @@ final class DictationStoreTests: XCTestCase {
         let context = makeContext(mode: .holdToRecord)
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
         await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
@@ -20,9 +20,9 @@ final class DictationStoreTests: XCTestCase {
         let context = makeContext(mode: .toggleToRecord)
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.toggle)
+        context.store.handleHotkeyEvent(.toggle(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.toggle)
+        context.store.handleHotkeyEvent(.toggle(route: .plain))
         await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
@@ -33,7 +33,7 @@ final class DictationStoreTests: XCTestCase {
         let context = makeContext(mode: .holdToRecord)
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
         context.store.handleHotkeyEvent(.cancel)
         await waitForIdle(store: context.store)
@@ -46,9 +46,9 @@ final class DictationStoreTests: XCTestCase {
         let context = makeContext(mode: .holdToRecord)
 
         context.store.enterTranscribing()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         context.store.enterInserting()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
 
         XCTAssertEqual(context.lifecycle.events, [])
         XCTAssertEqual(context.store.state, .inserting)
@@ -64,7 +64,7 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForState(
             .failed(
                 title: "Recording Failed",
@@ -81,7 +81,7 @@ final class DictationStoreTests: XCTestCase {
             )
         )
 
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
@@ -130,7 +130,7 @@ final class DictationStoreTests: XCTestCase {
         )
     }
 
-    func testClipboardFallbackReturnsToIdleAndAllowsAnotherRecording() async throws {
+    func testClipboardFallbackIsVisibleAndAllowsAnotherRecording() async throws {
         let context = try makeContext(
             mode: .holdToRecord,
             audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: Self.makeRecordedAudio()),
@@ -139,17 +139,29 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
 
-        await waitForIdle(store: context.store)
+        await waitForState(
+            .failed(
+                title: "Copied to Clipboard",
+                message: "Accessibility access is unavailable. Your result was copied to the clipboard instead."
+            ),
+            store: context.store
+        )
 
         XCTAssertEqual(context.store.lastTranscript, "hello world")
         XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["hello world"])
-        XCTAssertEqual(context.store.state, .idle)
+        XCTAssertEqual(
+            context.store.state,
+            .failed(
+                title: "Copied to Clipboard",
+                message: "Accessibility access is unavailable. Your result was copied to the clipboard instead."
+            )
+        )
 
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
@@ -169,9 +181,9 @@ final class DictationStoreTests: XCTestCase {
 
         context.store.setReady()
         for recordingNumber in 1...11 {
-            context.store.handleHotkeyEvent(.pressed)
+            context.store.handleHotkeyEvent(.pressed(route: .plain))
             await waitForLifecycleEvent(.started, context: context, count: recordingNumber)
-            context.store.handleHotkeyEvent(.released)
+            context.store.handleHotkeyEvent(.released(route: .plain))
             await waitForIdle(store: context.store)
         }
 
@@ -192,9 +204,9 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
 
         await waitForIdle(store: context.store)
 
@@ -218,9 +230,9 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
 
         await waitForIdle(store: context.store)
 
@@ -345,9 +357,9 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
 
         await waitForState(
             .failed(
@@ -357,7 +369,7 @@ final class DictationStoreTests: XCTestCase {
             store: context.store
         )
 
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
@@ -370,15 +382,15 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
         await waitForIdle(store: context.store)
 
         XCTAssertEqual(context.store.state, .idle)
         XCTAssertEqual(context.lifecycle.events, [.started])
 
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context, count: 2)
 
         XCTAssertEqual(context.store.state, .recording(mode: .holdToRecord))
@@ -394,7 +406,7 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
 
         await waitForState(.recording(mode: .holdToRecord), store: context.store)
         await waitForCaptureStart(audioCaptureEngine)
@@ -402,7 +414,7 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(overlayController.showCallCount, 1)
         XCTAssertEqual(context.lifecycle.events, [])
 
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.released(route: .plain))
         await waitForIdle(store: context.store)
         await waitForCaptureCancellation(audioCaptureEngine)
 
@@ -424,8 +436,8 @@ final class DictationStoreTests: XCTestCase {
         )
 
         context.store.setReady()
-        context.store.handleHotkeyEvent(.pressed)
-        context.store.handleHotkeyEvent(.released)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
+        context.store.handleHotkeyEvent(.released(route: .plain))
 
         await permissionCoordinator.finishRequest()
         await Task.yield()
@@ -635,7 +647,7 @@ final class DictationStoreTests: XCTestCase {
 
         XCTAssertEqual(insertion.insertedTexts, [])
         XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Recover me"])
-        context.store.handleHotkeyEvent(.pressed)
+        context.store.handleHotkeyEvent(.pressed(route: .plain))
         await waitForLifecycleEvent(.started, context: context, count: 2)
     }
 
@@ -665,6 +677,320 @@ final class DictationStoreTests: XCTestCase {
         XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Källtext"])
         XCTAssertEqual(insertion.insertedTexts, [])
         XCTAssertEqual(context.store.state, .idle)
+    }
+
+    func testPickerEntersChoosingImmediatelyWhileTranscriptionContinues() async throws {
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let transcription = FakeTranscriptionClient(
+            result: TranscriptionResult(text: "Source"),
+            suspends: true
+        )
+        let overlay = RecordingOverlaySpy()
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            overlayController: overlay,
+            transcriptionClient: transcription
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+
+        await waitForState(.choosing, store: context.store)
+        await waitForTranscriptionRequest(transcription)
+
+        XCTAssertEqual(context.hotkeyService.pickerActionCounts, [1])
+        XCTAssertEqual(
+            overlay.pickerPresentations,
+            [PickerPresentation(actionNames: ["Clean up"], transcriptPreview: nil, errorMessage: nil)]
+        )
+
+        context.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: context.store)
+        transcription.complete(with: .success(TranscriptionResult(text: "Late source")))
+        await Task.yield()
+
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
+    }
+
+    func testPickerChoiceCanArriveBeforeTranscript() async throws {
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let transcription = FakeTranscriptionClient(
+            result: TranscriptionResult(text: "Rough source"),
+            suspends: true
+        )
+        let processor = FakeTextProcessor(results: [.success("Clean result")])
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: transcription,
+            textProcessor: processor,
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForTranscriptionRequest(transcription)
+
+        context.store.handleHotkeyEvent(.pickerChoice(.action(index: 0)))
+        XCTAssertEqual(context.store.state, .transcribing)
+        XCTAssertEqual(processor.sourceTexts, [])
+
+        transcription.complete(with: .success(TranscriptionResult(text: "Rough source")))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(processor.sourceTexts, ["Rough source"])
+        XCTAssertEqual(processor.actions, [action])
+        XCTAssertEqual(insertion.insertedTexts, ["Clean result"])
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
+    }
+
+    func testPickerTranscriptCanArriveBeforeKeepAsIsChoiceAndUsesCapturedDestination() async throws {
+        let destination = TextInsertionDestination(
+            focusedElement: nil,
+            frontmostApplicationPID: 701
+        )
+        let insertion = FakeTextInsertionService(
+            outcome: .insertedDirectly,
+            destination: destination
+        )
+        let overlay = RecordingOverlaySpy()
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            overlayController: overlay,
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Keep this")),
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForPickerPresentation(overlay) { $0.transcriptPreview == "Keep this" }
+
+        XCTAssertEqual(context.store.state, .choosing)
+        XCTAssertEqual(insertion.insertedTexts, [])
+
+        context.store.handleHotkeyEvent(.pickerChoice(.keepAsIs))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(insertion.captureDestinationCallCount, 1)
+        XCTAssertEqual(insertion.insertedTexts, ["Keep this"])
+        XCTAssertEqual(insertion.insertedDestinationPIDs, [701])
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Keep this"])
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
+    }
+
+    func testPickerNumberUsesSavedOrderSnapshotFromRecordingStart() async throws {
+        let first = makeAction(name: "First", keyCode: 1, prompt: "First prompt")
+        let second = makeAction(name: "Second", keyCode: 2, prompt: "Second prompt")
+        let processor = FakeTextProcessor(results: [.success("Processed")])
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [first, second],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Source")),
+            textProcessor: processor
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        try context.settingsStore.updateDictationActions([second, first])
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForState(.choosing, store: context.store)
+
+        context.store.handleHotkeyEvent(.pickerChoice(.action(index: 1)))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(processor.actions, [second])
+        XCTAssertEqual(context.hotkeyService.pickerActionCounts, [2])
+    }
+
+    func testPickerCancellationBeforeAndAfterTranscriptPreservesOnlyAvailableSource() async throws {
+        let pendingTranscription = FakeTranscriptionClient(
+            result: TranscriptionResult(text: "Too late"),
+            suspends: true
+        )
+        let pendingContext = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: pendingTranscription
+        )
+
+        pendingContext.store.setReady()
+        pendingContext.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: pendingContext)
+        pendingContext.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForTranscriptionRequest(pendingTranscription)
+        pendingContext.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: pendingContext.store)
+        pendingTranscription.complete(with: .success(TranscriptionResult(text: "Too late")))
+        await Task.yield()
+
+        XCTAssertEqual(pendingContext.store.transcriptionHistory, [])
+        XCTAssertNil(pendingContext.store.lastTranscript)
+        XCTAssertEqual(pendingContext.hotkeyService.endPickerChoiceSessionCallCount, 1)
+
+        let availableContext = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Available source"))
+        )
+
+        availableContext.store.setReady()
+        availableContext.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: availableContext)
+        availableContext.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForState(.choosing, store: availableContext.store)
+        await waitForTranscript("Available source", store: availableContext.store)
+        availableContext.store.handleHotkeyEvent(.cancel)
+        await waitForIdle(store: availableContext.store)
+
+        XCTAssertEqual(availableContext.store.lastTranscript, "Available source")
+        XCTAssertEqual(availableContext.store.transcriptionHistory.map(\.text), ["Available source"])
+        XCTAssertEqual(availableContext.hotkeyService.endPickerChoiceSessionCallCount, 1)
+    }
+
+    func testPickerProcessingFailurePreservesSourceOnceAndReturnsToPicker() async throws {
+        let action = makeAction(name: "Clean up", keyCode: 1)
+        let processor = FakeTextProcessor(results: [.failure(CodexAppServerClient.Error.invalidOutput)])
+        let insertion = FakeTextInsertionService(outcome: .insertedDirectly)
+        let overlay = RecordingOverlaySpy()
+        let context = makeContext(
+            mode: .holdToRecord,
+            actions: [action],
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            overlayController: overlay,
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Recover me")),
+            textProcessor: processor,
+            textInsertionService: insertion
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForState(.choosing, store: context.store)
+        context.store.handleHotkeyEvent(.pickerChoice(.action(index: 0)))
+        await waitForPickerPresentation(overlay) { $0.errorMessage != nil }
+
+        XCTAssertEqual(context.store.state, .choosing)
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Recover me"])
+        XCTAssertEqual(context.hotkeyService.pickerActionCounts, [1, 1])
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
+
+        context.store.handleHotkeyEvent(.pickerChoice(.keepAsIs))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(insertion.insertedTexts, ["Recover me"])
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Recover me"])
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 2)
+    }
+
+    func testPickerControlRegistrationFailurePreservesTranscriptAndFailsSafely() async throws {
+        let transcription = FakeTranscriptionClient(
+            result: TranscriptionResult(text: "Recoverable source"),
+            suspends: true
+        )
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: transcription
+        )
+        context.hotkeyService.beginPickerChoiceSessionError = GlobalHotkeyService.Error.registrationConflict
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForTranscriptionRequest(transcription)
+
+        XCTAssertEqual(context.store.state, .transcribing)
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 0)
+
+        transcription.complete(with: .success(TranscriptionResult(text: "Recoverable source")))
+        await waitForState(
+            .failed(
+                title: "Action Picker Unavailable",
+                message: "That shortcut is already reserved by another app."
+            ),
+            store: context.store
+        )
+
+        XCTAssertEqual(context.store.lastTranscript, "Recoverable source")
+        XCTAssertEqual(context.store.transcriptionHistory.map(\.text), ["Recoverable source"])
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 0)
+        XCTAssertTrue(context.hotkeyService.persistentEventsEnabled)
+
+        context.hotkeyService.sendPersistentEvent(.pressed(route: .plain))
+        await waitForLifecycleEvent(.started, context: context, count: 2)
+    }
+
+    func testPickerEndRestoreFailureRetriesAgainWhenMenuOpens() async throws {
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(result: TranscriptionResult(text: "Keep me")),
+            textInsertionService: FakeTextInsertionService(outcome: .insertedDirectly)
+        )
+        context.hotkeyService.endPickerChoiceSessionError = GlobalHotkeyService.Error.registrationConflict
+        context.hotkeyService.configureError = GlobalHotkeyService.Error.registrationConflict
+
+        context.store.setReady()
+        context.hotkeyService.sendPersistentEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.hotkeyService.sendPersistentEvent(.released(route: .picker))
+        await waitForState(.choosing, store: context.store)
+        context.store.handleHotkeyEvent(.pickerChoice(.keepAsIs))
+        await waitForIdle(store: context.store)
+
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 2)
+        XCTAssertFalse(context.hotkeyService.persistentEventsEnabled)
+        XCTAssertNotNil(context.store.hotkeyErrorMessage)
+
+        context.hotkeyService.configureError = nil
+        context.store.retryHotkeyConfigurationIfNeeded()
+
+        XCTAssertEqual(context.hotkeyService.configureCallCount, 3)
+        XCTAssertTrue(context.hotkeyService.persistentEventsEnabled)
+        XCTAssertNil(context.store.hotkeyErrorMessage)
+
+        context.hotkeyService.sendPersistentEvent(.pressed(route: .plain))
+        await waitForLifecycleEvent(.started, context: context, count: 2)
+    }
+
+    func testPickerTranscriptionFailureEndsChoiceControls() async throws {
+        let context = makeContext(
+            mode: .holdToRecord,
+            audioCaptureEngine: FakeAudioCaptureEngine(recordedAudio: try Self.makeRecordedAudio()),
+            transcriptionClient: FakeTranscriptionClient(
+                error: TranscriptionClient.Error.requestFailed("Offline")
+            )
+        )
+
+        context.store.setReady()
+        context.store.handleHotkeyEvent(.pressed(route: .picker))
+        await waitForLifecycleEvent(.started, context: context)
+        context.store.handleHotkeyEvent(.released(route: .picker))
+        await waitForState(
+            .failed(
+                title: "Transcription Failed",
+                message: "Transcription request failed: Offline"
+            ),
+            store: context.store
+        )
+
+        XCTAssertEqual(context.hotkeyService.endPickerChoiceSessionCallCount, 1)
     }
 
     func testOtherRouteCannotStartOrStopConcurrentRecording() async {
@@ -836,6 +1162,59 @@ final class DictationStoreTests: XCTestCase {
         XCTFail("Timed out waiting for capture cancellation", file: file, line: line)
     }
 
+    private func waitForTranscriptionRequest(
+        _ transcriptionClient: FakeTranscriptionClient,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if transcriptionClient.transcribeCallCount > 0 {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for transcription request", file: file, line: line)
+    }
+
+    private func waitForTranscript(
+        _ transcript: String,
+        store: DictationStore,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if store.lastTranscript == transcript {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for transcript \(transcript)", file: file, line: line)
+    }
+
+    private func waitForPickerPresentation(
+        _ overlay: RecordingOverlaySpy,
+        matching predicate: (PickerPresentation) -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<50 {
+            if overlay.pickerPresentations.contains(where: predicate) {
+                return
+            }
+
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTFail("Timed out waiting for picker presentation", file: file, line: line)
+    }
+
 
     private static func makeRecordedAudio() throws -> RecordedAudio {
         let fileURL = FileManager.default.temporaryDirectory
@@ -921,6 +1300,7 @@ private final class RecordingOverlaySpy: RecordingOverlayControlling {
     private(set) var hideCallCount = 0
     private(set) var processingActionNames: [String] = []
     private(set) var showInsertingCallCount = 0
+    private(set) var pickerPresentations: [PickerPresentation] = []
     private(set) var levels: [[Float]] = []
 
     func show() {
@@ -933,6 +1313,10 @@ private final class RecordingOverlaySpy: RecordingOverlayControlling {
 
     func showTranscribing() {
         showTranscribingCallCount += 1
+    }
+
+    func showChoosing(_ presentation: PickerPresentation) {
+        pickerPresentations.append(presentation)
     }
 
     func showProcessing(actionName: String) {
@@ -950,25 +1334,40 @@ private final class RecordingOverlaySpy: RecordingOverlayControlling {
 
 private final class FakeTranscriptionClient: AudioTranscribing, @unchecked Sendable {
     private var results: [Result<TranscriptionResult, Swift.Error>]
+    private let suspends: Bool
+    private var continuation: CheckedContinuation<TranscriptionResult, Swift.Error>?
+    private(set) var transcribeCallCount = 0
 
-    init(result: TranscriptionResult) {
+    init(result: TranscriptionResult, suspends: Bool = false) {
         self.results = [.success(result)]
+        self.suspends = suspends
     }
 
     init(results: [TranscriptionResult]) {
         self.results = results.map { .success($0) }
+        self.suspends = false
     }
 
     init(error: Swift.Error) {
         self.results = [.failure(error)]
+        self.suspends = false
     }
 
     func transcribe(audio: RecordedAudio) async throws -> TranscriptionResult {
+        transcribeCallCount += 1
+        if suspends {
+            return try await withCheckedThrowingContinuation { continuation = $0 }
+        }
         if results.count > 1 {
             return try results.removeFirst().get()
         }
 
         return try results[0].get()
+    }
+
+    func complete(with result: Result<TranscriptionResult, Swift.Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }
 
@@ -1033,13 +1432,29 @@ private final class FakeClipboardService: ClipboardControlling {
 private final class FakeTextInsertionService: TextInserting {
     private let outcome: TextInsertionOutcome
     private(set) var insertedTexts: [String] = []
+    private(set) var insertedDestinationPIDs: [pid_t?] = []
+    private(set) var captureDestinationCallCount = 0
+    var destination: TextInsertionDestination
 
-    init(outcome: TextInsertionOutcome) {
+    init(
+        outcome: TextInsertionOutcome,
+        destination: TextInsertionDestination = TextInsertionDestination(
+            focusedElement: nil,
+            frontmostApplicationPID: 42
+        )
+    ) {
         self.outcome = outcome
+        self.destination = destination
     }
 
-    func insert(_ text: String) async -> TextInsertionOutcome {
+    func captureDestination() -> TextInsertionDestination {
+        captureDestinationCallCount += 1
+        return destination
+    }
+
+    func insert(_ text: String, at destination: TextInsertionDestination) async -> TextInsertionOutcome {
         insertedTexts.append(text)
+        insertedDestinationPIDs.append(destination.frontmostApplicationPID)
         return outcome
     }
 }
@@ -1127,11 +1542,43 @@ private final class FakeGlobalHotkeyService: GlobalHotkeyControlling {
     private(set) var configuredRegistrations: [DictationHotkeyRegistration] = []
     private(set) var configuredMode: RecordingMode?
     private(set) var configureCallCount = 0
+    private(set) var pickerActionCounts: [Int] = []
+    private(set) var endPickerChoiceSessionCallCount = 0
+    private(set) var persistentEventsEnabled = false
+    var beginPickerChoiceSessionError: Swift.Error?
+    var endPickerChoiceSessionError: Swift.Error?
+    var configureError: Swift.Error?
 
     func configure(registrations: [DictationHotkeyRegistration], mode: RecordingMode) throws {
         configureCallCount += 1
+        if let configureError {
+            persistentEventsEnabled = false
+            throw configureError
+        }
         configuredRegistrations = registrations
         configuredMode = mode
+        persistentEventsEnabled = true
+    }
+
+    func beginPickerChoiceSession(actionCount: Int) throws {
+        pickerActionCounts.append(actionCount)
+        persistentEventsEnabled = false
+        if let beginPickerChoiceSessionError {
+            throw beginPickerChoiceSessionError
+        }
+    }
+
+    func endPickerChoiceSession() throws {
+        endPickerChoiceSessionCallCount += 1
+        if let endPickerChoiceSessionError {
+            throw endPickerChoiceSessionError
+        }
+        persistentEventsEnabled = true
+    }
+
+    func sendPersistentEvent(_ event: GlobalHotkeyService.Event) {
+        guard persistentEventsEnabled else { return }
+        onEvent?(event)
     }
 }
 

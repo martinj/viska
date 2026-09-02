@@ -68,6 +68,24 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.preferences.recordingMode, .toggleToRecord)
         XCTAssertEqual(store.preferences.wordReplacements, [])
         XCTAssertEqual(store.preferences.dictationActions, [])
+        XCTAssertNil(store.preferences.pickerHotkey)
+    }
+
+    func testPickerShortcutPersistsIndependently() throws {
+        let suiteName = #function
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let pickerHotkey = HotkeyDescriptor(
+            keyCode: 36,
+            modifiers: HotkeyDescriptor.requiredModifierFlags
+        )
+
+        let firstStore = SettingsStore(userDefaults: defaults)
+        try firstStore.updatePickerHotkey(pickerHotkey)
+        let secondStore = SettingsStore(userDefaults: defaults)
+
+        XCTAssertEqual(secondStore.preferences.pickerHotkey, pickerHotkey)
+        XCTAssertEqual(secondStore.preferences.hotkey, AppPreferences.default.hotkey)
     }
 
     func testMultipleDictationActionsRoundTripWithTrimmedFields() throws {
@@ -178,10 +196,24 @@ final class SettingsStoreTests: XCTestCase {
             model: "gpt-5.6-luna",
             prompt: "Transform."
         )
+        let pickerShortcut = HotkeyDescriptor(
+            keyCode: 3,
+            modifiers: HotkeyDescriptor.requiredModifierFlags
+        )
+        let pickerConflict = DictationAction(
+            id: UUID(),
+            name: "Picker conflict",
+            hotkey: pickerShortcut,
+            model: "gpt-5.6-luna",
+            prompt: "Transform."
+        )
 
         XCTAssertThrowsError(try store.updateDictationActions([first, duplicateID]))
         XCTAssertThrowsError(try store.updateDictationActions([first, duplicateShortcut]))
         XCTAssertThrowsError(try store.updateDictationActions([plainShortcut]))
+        XCTAssertThrowsError(try store.updatePickerHotkey(store.preferences.hotkey))
+        XCTAssertNoThrow(try store.updatePickerHotkey(pickerShortcut))
+        XCTAssertThrowsError(try store.updateDictationActions([pickerConflict]))
         XCTAssertEqual(store.preferences.dictationActions, [])
     }
 

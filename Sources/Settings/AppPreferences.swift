@@ -19,17 +19,20 @@ enum RecordingMode: String, Codable, CaseIterable, Identifiable {
 struct AppPreferences: Codable, Equatable {
     var recordingMode: RecordingMode
     var hotkey: HotkeyDescriptor
+    var pickerHotkey: HotkeyDescriptor?
     var wordReplacements: [WordReplacement]
     var dictationActions: [DictationAction]
 
     init(
         recordingMode: RecordingMode,
         hotkey: HotkeyDescriptor,
+        pickerHotkey: HotkeyDescriptor? = nil,
         wordReplacements: [WordReplacement],
         dictationActions: [DictationAction] = []
     ) {
         self.recordingMode = recordingMode
         self.hotkey = hotkey
+        self.pickerHotkey = pickerHotkey
         self.wordReplacements = wordReplacements
         self.dictationActions = dictationActions
     }
@@ -38,6 +41,7 @@ struct AppPreferences: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
         hotkey = try container.decode(HotkeyDescriptor.self, forKey: .hotkey)
+        pickerHotkey = try container.decodeIfPresent(HotkeyDescriptor.self, forKey: .pickerHotkey)
         wordReplacements = try container.decodeIfPresent([WordReplacement].self, forKey: .wordReplacements) ?? []
         dictationActions = try container.decodeIfPresent([DictationAction].self, forKey: .dictationActions) ?? []
 
@@ -60,6 +64,18 @@ struct AppPreferences: Codable, Equatable {
     func validateDictationActions() throws {
         var ids = Set<UUID>()
         var shortcuts: Set<HotkeyDescriptor> = [hotkey]
+
+        if let pickerHotkey {
+            do {
+                try pickerHotkey.validate()
+            } catch let error as HotkeyDescriptor.ValidationError {
+                throw DictationActionValidationError.invalidHotkey(error)
+            }
+
+            guard shortcuts.insert(pickerHotkey).inserted else {
+                throw DictationActionValidationError.duplicateShortcut
+            }
+        }
 
         for action in dictationActions {
             let sanitized = action.sanitized()
@@ -91,6 +107,7 @@ struct AppPreferences: Codable, Equatable {
             keyCode: UInt32(49),
             modifiers: HotkeyDescriptor.requiredModifierFlags
         ),
+        pickerHotkey: nil,
         wordReplacements: [],
         dictationActions: []
     )
