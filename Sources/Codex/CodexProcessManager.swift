@@ -20,11 +20,11 @@ final class CodexProcessManager: @unchecked Sendable {
     }
 
     func makeTransport() throws -> any CodexLineTransport {
-        guard let executableURL = binaryLocator.locate() else {
+        guard let executable = binaryLocator.locate() else {
             throw Error.binaryMissing
         }
 
-        return CodexProcessTransport(executableURL: executableURL)
+        return CodexProcessTransport(executable: executable)
     }
 }
 
@@ -36,15 +36,16 @@ private final class CodexProcessTransport: CodexLineTransport, @unchecked Sendab
     private let stdinPipe = Pipe()
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
-    private let executableURL: URL
+    private let executable: CodexExecutable
     private var readTask: Task<Void, Never>?
 
-    init(executableURL: URL) {
-        self.executableURL = executableURL
+    init(executable: CodexExecutable) {
+        self.executable = executable
     }
 
     func start() throws {
-        process.executableURL = executableURL
+        process.executableURL = executable.url
+        process.environment = executable.environment
         process.arguments = ["app-server", "--listen", "stdio://"]
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
